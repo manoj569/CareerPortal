@@ -1,0 +1,80 @@
+using JobPortal.Application.Abstractions.Persistence;
+using JobPortal.Application.Features.Jobs;
+using JobPortal.Domain.Entities;
+using JobPortal.Persistence.Context;
+using Microsoft.EntityFrameworkCore;
+
+namespace JobPortal.Persistence.Repositories;
+
+public sealed class JobRepository(JobPortalDbContext context) : IJobRepository
+{
+    public Task<Job?> GetByIdAsync(Guid id, bool includeDeleted = false, CancellationToken cancellationToken = default)
+    {
+        IQueryable<Job> query = context.Jobs;
+        if (includeDeleted) query = query.IgnoreQueryFilters();
+        return query.Include(x => x.Company).Include(x => x.Category)
+            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+    }
+
+    public async Task<(IReadOnlyCollection<Job> Items, int TotalCount)> SearchAsync(JobSearchQuery query, CancellationToken cancellationToken = default)
+    {
+        IQueryable<Job> source = context.Jobs.AsNoTracking().IgnoreQueryFilters()
+            .Include(x => x.Company).Include(x => x.Category);
+
+        if (query.IsDeleted.HasValue) source = source.Where(x => x.IsDeleted == query.IsDeleted.Value);
+        if (!string.IsNullOrWhiteSpace(query.Search))
+        {
+            var term = query.Search.Trim();
+            source = source.Where(x => x.Title.Contains(term) || x.ReferenceNumber.Contains(term) ||
+                x.Description.Contains(term) || (x.Location != null && x.Location.Contains(term)) ||
+                x.Company.Name.Contains(term) || x.Category.Name.Contains(term));
+        }
+        if (query.CompanyId.HasValue) source = source.Where(x => x.CompanyId == query.CompanyId);
+        if (query.CategoryId.HasValue) source = source.Where(x => x.CategoryId == query.CategoryId);
+        if (query.Status.HasValue) source = source.Where(x => x.Status == query.Status);
+        if (query.EmploymentType.HasValue) source = source.Where(x => x.EmploymentType == query.EmploymentType);
+        if (query.WorkplaceType.HasValue) source = source.Where(x => x.WorkplaceType == query.WorkplaceType);
+        if (query.ExperienceLevel.HasValue) source = source.Where(x => x.ExperienceLevel == query.ExperienceLevel);
+        if (query.IsFeatured.HasValue) source = source.Where(x => x.IsFeatured == query.IsFeatured);
+        if (query.IsHidden.HasValue) source = source.Where(x => x.IsHidden == query.IsHidden);
+        if (query.PublishedFromUtc.HasValue) source = source.Where(x => x.PublishedAtUtc >= query.PublishedFromUtc);
+        if (query.PublishedToUtc.HasValue) source = source.Where(x => x.PublishedAtUtc <= query.PublishedToUtc);
+
+        var totalCount = await source.CountAsync(cancellationToken);
+        source = ApplySorting(source, query.SortBy, query.SortDirection.Equals("desc", StringComparison.OrdinalIgnoreCase));
+        var items = await source.Skip((query.PageNumber - 1) * query.PageSize).Take(query.PageSize).ToArrayAsync(cancellationToken);
+        return (items, totalCount);
+    }
+
+    public Task<bool> CompanyExistsAsync(Guid companyId, CancellationToken cancellationToken = default) =>
+        context.Companies.AnyAsync(x => x.Id == companyId, cancellationToken);
+    public Task<bool> CategoryExistsAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
+        context.Categories.AnyAsync(x => x.Id == categoryId, cancellationToken);
+    public Task AddAsync(Job job, CancellationToken cancellationToken = default) =>
+        context.Jobs.AddAsync(job, cancellationToken).AsTask();
+    public void Update(Job job) => context.Jobs.Update(job);
+    public void Remove(Job job) => context.Jobs.Remove(job);
+    public async Task DeletePermanentlyAsync(Guid id, CancellationToken cancellationToken = default) =>
+        _ = await context.Jobs.IgnoreQueryFilters().Where(x => x.Id == id).ExecuteDeleteAsync(cancellationToken);
+
+    private static IQueryable<Job> ApplySorting(IQueryable<Job> source, string sortBy, bool descending) =>
+        (sortBy.ToLowerInvariant(), descending) switch
+        {
+            ("title", false) => source.OrderBy(x => x.Title).ThenBy(x => x.Id),
+            ("title", true) => source.OrderByDescending(x => x.Title).ThenBy(x => x.Id),
+            ("updatedat", false) => source.OrderBy(x => x.UpdatedAtUtc).ThenBy(x => x.Id),
+            ("updatedat", true) => source.OrderByDescending(x => x.UpdatedAtUtc).ThenBy(x => x.Id),
+            ("publishedat", false) => source.OrderBy(x => x.PublishedAtUtc).ThenBy(x => x.Id),
+            ("publishedat", true) => source.OrderByDescending(x => x.PublishedAtUtc).ThenBy(x => x.Id),
+            ("minimumsalary", false) => source.OrderBy(x => x.MinimumSalary).ThenBy(x => x.Id),
+            ("minimumsalary", true) => source.OrderByDescending(x => x.MinimumSalary).ThenBy(x => x.Id),
+            ("maximumsalary", false) => source.OrderBy(x => x.MaximumSalary).ThenBy(x => x.Id),
+            ("maximumsalary", true) => source.OrderByDescending(x => x.MaximumSalary).ThenBy(x => x.Id),
+            ("expiresat", false) => source.OrderBy(x => x.ExpiresAtUtc).ThenBy(x => x.Id),
+            ("expiresat", true) => source.OrderByDescending(x => x.ExpiresAtUtc).ThenBy(x => x.Id),
+            ("status", false) => source.OrderBy(x => x.Status).ThenBy(x => x.Id),
+            ("status", true) => source.OrderByDescending(x => x.Status).ThenBy(x => x.Id),
+            (_, false) => source.OrderBy(x => x.CreatedAtUtc).ThenBy(x => x.Id),
+            _ => source.OrderByDescending(x => x.CreatedAtUtc).ThenBy(x => x.Id)
+        };
+}

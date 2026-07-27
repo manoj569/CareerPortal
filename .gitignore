@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+.vs/
+.vscode/
+Logs/
+*.user
+*.suo
+*.cache
+*.log
+appsettings.Local.json
+appsettings.*.local.json
+.env
+.env.*
+!.env.example

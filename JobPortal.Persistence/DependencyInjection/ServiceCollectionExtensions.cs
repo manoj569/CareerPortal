@@ -32,6 +32,8 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPaymentRepository, PaymentRepository>();
         services.AddScoped<IDashboardRepository, DashboardRepository>();
         services.AddScoped<IAdminDashboardRepository, AdminDashboardRepository>();
+        services.AddScoped<ICompanyManagementRepository, CompanyManagementRepository>();
+        services.AddScoped<ICategoryManagementRepository, CategoryManagementRepository>();
         services.AddScoped<IUnitOfWork, UnitOfWork>();
         return services;
     }

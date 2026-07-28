@@ -3,7 +3,7 @@ using JobPortal.Shared.Models;
 
 namespace JobPortal.Application.Features.Payments;
 
-public sealed record CreatePaymentOrderRequest(Guid JobId);
+public sealed record CreatePaymentOrderRequest;
 public sealed record PaymentOrderResponse(
     Guid PaymentId, Guid MembershipId, string ProviderOrderId, string KeyId,
     long AmountInMinorUnits, string CurrencyCode, string Receipt);

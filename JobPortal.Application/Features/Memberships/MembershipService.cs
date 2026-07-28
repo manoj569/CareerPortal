@@ -18,20 +18,20 @@ public sealed class MembershipService(
         if (!userId.HasValue)
             return new ApplicationAccessResponse(ApplicationAccessStatus.LoginRequired, "Login Required");
 
-        var membership = await memberships.GetActiveAsync(userId.Value, job.CompanyId, cancellationToken);
+        var membership = await memberships.GetActiveForUserAsync(userId.Value, cancellationToken);
         if (membership is null)
             return new ApplicationAccessResponse(
-                ApplicationAccessStatus.PaymentRequired, "Payment Required", CompanyId: job.CompanyId);
+                ApplicationAccessStatus.PaymentRequired, "Payment Required");
 
         await memberships.RecordApplicationAsync(userId.Value, job.JobId, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return new ApplicationAccessResponse(
-            ApplicationAccessStatus.Granted, "Application access granted.", job.ApplicationUrl, job.CompanyId);
+            ApplicationAccessStatus.Granted, "Application access granted.", job.ApplicationUrl);
     }
 
     public Task<IReadOnlyCollection<MembershipResponse>> GetMyMembershipsAsync(
         Guid userId, CancellationToken cancellationToken = default) =>
-        memberships.GetForUserAsync(userId, cancellationToken);
+        memberships.GetMembershipsForUserAsync(userId, cancellationToken);
 
     public async Task<PagedResponse<MembershipHistoryResponse>> GetHistoryAsync(
         Guid userId, HistoryQuery query, CancellationToken cancellationToken = default)

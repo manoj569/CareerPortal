@@ -4,7 +4,6 @@ namespace JobPortal.Application.Features.Payments;
 
 public sealed class CreatePaymentOrderRequestValidator : AbstractValidator<CreatePaymentOrderRequest>
 {
-    public CreatePaymentOrderRequestValidator() => RuleFor(x => x.JobId).NotEmpty();
 }
 
 public sealed class ConfirmRazorpayPaymentRequestValidator : AbstractValidator<ConfirmRazorpayPaymentRequest>

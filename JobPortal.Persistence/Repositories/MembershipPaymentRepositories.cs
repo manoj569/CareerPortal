@@ -19,33 +19,22 @@ public sealed class MembershipRepository(
         return context.Jobs.AsNoTracking()
             .Where(x => x.Slug == slug && x.Status == JobStatus.Published && !x.IsHidden &&
                 (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow))
-            .Select(x => new AvailableJobAccess(x.Id, x.CompanyId, x.ApplicationUrl))
+            .Select(x => new AvailableJobAccess(x.Id, x.ApplicationUrl))
             .SingleOrDefaultAsync(cancellationToken);
     }
 
-    public Task<AvailableJobAccess?> GetAvailableJobAsync(
-        Guid jobId, CancellationToken cancellationToken = default)
-    {
-        var utcNow = timeProvider.GetUtcNow().UtcDateTime;
-        return context.Jobs.AsNoTracking()
-            .Where(x => x.Id == jobId && x.Status == JobStatus.Published && !x.IsHidden &&
-                (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow))
-            .Select(x => new AvailableJobAccess(x.Id, x.CompanyId, x.ApplicationUrl))
-            .SingleOrDefaultAsync(cancellationToken);
-    }
-
-    public Task<Membership?> GetActiveAsync(Guid userId, Guid companyId, CancellationToken cancellationToken = default)
+    public Task<Membership?> GetActiveForUserAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         return context.Memberships.AsNoTracking().SingleOrDefaultAsync(x =>
-            x.UserId == userId && x.CompanyId == companyId &&
+            x.UserId == userId &&
             x.Status == MembershipStatus.Active &&
             (!x.EndsAtUtc.HasValue || x.EndsAtUtc > utcNow), cancellationToken);
     }
 
-    public Task<Membership?> GetForCompanyAsync(Guid userId, Guid companyId, CancellationToken cancellationToken = default) =>
+    public Task<Membership?> GetPortalMembershipForUserAsync(Guid userId, CancellationToken cancellationToken = default) =>
         context.Memberships.Include(x => x.History)
-            .SingleOrDefaultAsync(x => x.UserId == userId && x.CompanyId == companyId, cancellationToken);
+            .SingleOrDefaultAsync(x => x.UserId == userId, cancellationToken);
 
     public Task<Membership?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         context.Memberships.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
@@ -53,12 +42,12 @@ public sealed class MembershipRepository(
     public Task AddAsync(Membership membership, CancellationToken cancellationToken = default) =>
         context.Memberships.AddAsync(membership, cancellationToken).AsTask();
 
-    public async Task<IReadOnlyCollection<MembershipResponse>> GetForUserAsync(
+    public async Task<IReadOnlyCollection<MembershipResponse>> GetMembershipsForUserAsync(
         Guid userId, CancellationToken cancellationToken = default) =>
         await context.Memberships.AsNoTracking().Where(x => x.UserId == userId)
             .OrderByDescending(x => x.CreatedAtUtc)
             .Select(x => new MembershipResponse(x.Id, x.PlanName, x.Status, x.StartsAtUtc,
-                x.EndsAtUtc, x.AutoRenew, x.CompanyId, x.Company.Name))
+                x.EndsAtUtc, x.AutoRenew))
             .ToArrayAsync(cancellationToken);
 
     public async Task<(IReadOnlyCollection<MembershipHistoryResponse> Items, int TotalCount)> GetHistoryAsync(

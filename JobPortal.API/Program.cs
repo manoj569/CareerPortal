@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading.RateLimiting;
 using JobPortal.API.Health;
 using JobPortal.API.Middleware;
+using JobPortal.API.Startup;
 using JobPortal.API.Swagger;
 using JobPortal.Application;
 using JobPortal.Infrastructure;
@@ -161,8 +162,15 @@ builder.Services.AddAuthorization();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddPersistence(builder.Configuration);
+builder.Services.AddScoped<AdminBootstrapInitializer>();
 
 var app = builder.Build();
+
+await using (var scope = app.Services.CreateAsyncScope())
+{
+    await scope.ServiceProvider.GetRequiredService<AdminBootstrapInitializer>()
+        .InitializeAsync();
+}
 
 app.UseForwardedHeaders();
 app.UseMiddleware<GlobalExceptionMiddleware>();

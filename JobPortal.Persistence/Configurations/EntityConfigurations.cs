@@ -170,10 +170,9 @@ public sealed class MembershipConfiguration : IEntityTypeConfiguration<Membershi
         builder.ConfigureBaseEntity();
         builder.Property(x => x.PlanName).HasMaxLength(100).IsRequired();
         builder.Property(x => x.RowVersion).IsRowVersion();
-        builder.HasIndex(x => new { x.UserId, x.CompanyId }).IsUnique().HasFilter("[IsDeleted] = 0");
+        builder.HasIndex(x => x.UserId).IsUnique().HasFilter("[IsDeleted] = 0");
         builder.HasIndex(x => new { x.Status, x.EndsAtUtc });
         builder.HasOne(x => x.User).WithMany(x => x.Memberships).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
-        builder.HasOne(x => x.Company).WithMany(x => x.Memberships).HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);
     }
 }
 

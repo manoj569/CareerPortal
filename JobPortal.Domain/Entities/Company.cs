@@ -16,5 +16,4 @@ public sealed class Company : BaseEntity
     public Guid OwnerUserId { get; set; }
     public User OwnerUser { get; set; } = null!;
     public ICollection<Job> Jobs { get; set; } = new List<Job>();
-    public ICollection<Membership> Memberships { get; set; } = new List<Membership>();
 }

@@ -24,20 +24,19 @@ public sealed class PaymentService(
         Guid userId, CreatePaymentOrderRequest request, CancellationToken cancellationToken = default)
     {
         await createOrderValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var job = await memberships.GetAvailableJobAsync(request.JobId, cancellationToken)
-            ?? throw new NotFoundException("Job was not found.");
-        if (await memberships.GetActiveAsync(userId, job.CompanyId, cancellationToken) is not null)
-            throw new ConflictException("An active membership already exists for this company.");
+        if (await memberships.GetActiveForUserAsync(userId, cancellationToken) is not null)
+            throw new ConflictException("An active portal membership already exists.");
 
         var utcNow = UtcNow;
         var plan = plans.GetDefaultPlan();
-        var membership = await memberships.GetForCompanyAsync(userId, job.CompanyId, cancellationToken);
+        var membership = await memberships.GetPortalMembershipForUserAsync(userId, cancellationToken);
+        if (membership?.Status == MembershipStatus.Pending)
+            throw new ConflictException("A portal membership payment order is already pending.");
         if (membership is null)
         {
             membership = new Membership
             {
                 UserId = userId,
-                CompanyId = job.CompanyId,
                 PlanName = plan.Name,
                 Status = MembershipStatus.Pending,
                 StartsAtUtc = utcNow
@@ -81,6 +80,9 @@ public sealed class PaymentService(
         {
             payment.Status = PaymentStatus.Failed;
             payment.History.Add(NewPaymentHistory(payment, PaymentStatus.Pending, PaymentStatus.Failed, userId, "Provider order creation failed."));
+            var previous = membership.Status;
+            membership.Status = MembershipStatus.Suspended;
+            membership.History.Add(NewMembershipHistory(membership, previous, MembershipStatus.Suspended, userId, "Provider order creation failed."));
             await unitOfWork.SaveChangesAsync(cancellationToken);
             throw;
         }

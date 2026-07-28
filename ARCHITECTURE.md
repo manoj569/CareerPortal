@@ -47,6 +47,15 @@ References must continue to point inward. Domain code must not reference EF Core
 
 - JWT signing keys, Razorpay secrets, SMTP credentials, and production connection strings belong in environment variables or a secret manager.
 - Razorpay amounts and plan duration are server-controlled.
+
+## Initial Administrator bootstrap
+
+The API can create the first Administrator through a disabled-by-default, idempotent startup initializer.
+Configure `BootstrapAdmin:Enabled`, `Email`, `Password`, `FirstName`, and `LastName` through
+.NET User Secrets locally or a production secret manager. Never place the credentials in an
+appsettings file. Set `BootstrapAdmin:Enabled` back to `false` after the first Administrator has
+been created. The initializer does not apply database migrations and will never elevate an
+existing non-Administrator account.
 - Payment signatures use constant-time verification.
 - Password changes and resets revoke active refresh tokens.
 - Authentication endpoints have stricter per-client rate limits.

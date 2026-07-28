@@ -13,8 +13,6 @@ public sealed class Membership : BaseEntity
     public byte[] RowVersion { get; set; } = [];
     public Guid UserId { get; set; }
     public User User { get; set; } = null!;
-    public Guid CompanyId { get; set; }
-    public Company Company { get; set; } = null!;
     public ICollection<Payment> Payments { get; set; } = new List<Payment>();
     public ICollection<MembershipHistory> History { get; set; } = new List<MembershipHistory>();
 }

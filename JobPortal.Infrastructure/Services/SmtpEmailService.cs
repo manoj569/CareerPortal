@@ -9,35 +9,70 @@ namespace JobPortal.Infrastructure.Services;
 
 public sealed class SmtpEmailService(IConfiguration configuration, ILogger<SmtpEmailService> logger) : IEmailService
 {
-    private static readonly Action<ILogger, string, Exception?> SmtpNotConfigured =
-        LoggerMessage.Define<string>(
-            LogLevel.Warning,
-            new EventId(1001, nameof(SmtpNotConfigured)),
-            "Password reset email for {Email} was not sent because SMTP is not configured.");
+    private static readonly Action<ILogger, Exception?> DeliveryDisabled =
+        LoggerMessage.Define(LogLevel.Warning, new EventId(1001, nameof(DeliveryDisabled)),
+            "Transactional email delivery is disabled.");
+    private static readonly Action<ILogger, string, Exception?> DeliveryFailed =
+        LoggerMessage.Define<string>(LogLevel.Error, new EventId(1002, nameof(DeliveryFailed)),
+            "Transactional email delivery failed for message type {MessageType}.");
 
-    public async Task SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default)
+    public Task<EmailDeliveryResult> SendEmailVerificationAsync(
+        User user, string verificationToken, CancellationToken cancellationToken = default) =>
+        SendAsync(user.Email, "Verify your Job Portal email",
+            $"Verify your email within 24 hours using this secure link: {BuildUrl("Email:VerificationUrl", user.Email, verificationToken)}",
+            "email-verification", cancellationToken);
+
+    public Task<EmailDeliveryResult> SendPasswordResetAsync(
+        User user, string resetToken, CancellationToken cancellationToken = default) =>
+        SendAsync(user.Email, "Reset your Job Portal password",
+            $"Reset your password within 30 minutes using this secure link: {BuildUrl("Email:PasswordResetUrl", user.Email, resetToken)}",
+            "password-reset", cancellationToken);
+
+    private async Task<EmailDeliveryResult> SendAsync(
+        string recipient, string subject, string body, string messageType, CancellationToken cancellationToken)
     {
-        var host = configuration["Email:Smtp:Host"];
-        var sender = configuration["Email:FromAddress"];
-        var resetUrl = $"{configuration["Email:PasswordResetUrl"]?.TrimEnd('/')}?email={Uri.EscapeDataString(user.Email)}&token={Uri.EscapeDataString(resetToken)}";
-
-        if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(sender))
+        if (!configuration.GetValue("Email:Enabled", false))
         {
-            SmtpNotConfigured(logger, user.Email, null);
-            return;
+            DeliveryDisabled(logger, null);
+            return EmailDeliveryResult.Disabled;
         }
 
-        using var client = new SmtpClient(host, configuration.GetValue<int?>("Email:Smtp:Port") ?? 587)
+        try
         {
-            EnableSsl = configuration.GetValue("Email:Smtp:EnableSsl", true),
-            Credentials = new NetworkCredential(configuration["Email:Smtp:Username"], configuration["Email:Smtp:Password"])
-        };
-        using var message = new MailMessage(sender, user.Email)
+            using var client = new SmtpClient(
+                configuration["Email:Smtp:Host"],
+                configuration.GetValue<int>("Email:Smtp:Port"))
+            {
+                EnableSsl = configuration.GetValue("Email:Smtp:EnableSsl", true),
+                Credentials = new NetworkCredential(
+                    configuration["Email:Smtp:Username"],
+                    configuration["Email:Smtp:Password"])
+            };
+            using var message = new MailMessage(configuration["Email:FromAddress"]!, recipient)
+            {
+                Subject = subject,
+                Body = body,
+                IsBodyHtml = false
+            };
+            await client.SendMailAsync(message, cancellationToken);
+            return EmailDeliveryResult.Sent;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            Subject = "Reset your Job Portal password",
-            Body = $"Use the following secure link to reset your password. It expires in 30 minutes: {resetUrl}",
-            IsBodyHtml = false
-        };
-        await client.SendMailAsync(message, cancellationToken);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            DeliveryFailed(logger, messageType, exception);
+            return EmailDeliveryResult.Failed;
+        }
+    }
+
+    private string BuildUrl(string configurationKey, string email, string token)
+    {
+        var baseUrl = configuration[configurationKey]
+            ?? throw new InvalidOperationException($"{configurationKey} is not configured.");
+        var separator = baseUrl.Contains('?', StringComparison.Ordinal) ? '&' : '?';
+        return $"{baseUrl}{separator}email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(token)}";
     }
 }

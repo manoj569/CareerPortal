@@ -23,6 +23,21 @@ public sealed class LoginRequestValidator : AbstractValidator<LoginRequest>
     public LoginRequestValidator() { RuleFor(x => x.Email).NotEmpty().EmailAddress(); RuleFor(x => x.Password).NotEmpty().MaximumLength(128); }
 }
 
+public sealed class VerifyEmailRequestValidator : AbstractValidator<VerifyEmailRequest>
+{
+    public VerifyEmailRequestValidator()
+    {
+        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(256);
+    }
+}
+
+public sealed class ResendVerificationRequestValidator : AbstractValidator<ResendVerificationRequest>
+{
+    public ResendVerificationRequestValidator() =>
+        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
+}
+
 public sealed class RefreshTokenRequestValidator : AbstractValidator<RefreshTokenRequest>
 {
     public RefreshTokenRequestValidator() { RuleFor(x => x.RefreshToken).NotEmpty().MaximumLength(512); }

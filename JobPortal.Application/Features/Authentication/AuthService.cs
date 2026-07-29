@@ -19,6 +19,8 @@ public sealed class AuthService(
     IEmailService emailService,
     IValidator<RegisterRequest> registerValidator,
     IValidator<LoginRequest> loginValidator,
+    IValidator<VerifyEmailRequest> verifyEmailValidator,
+    IValidator<ResendVerificationRequest> resendVerificationValidator,
     IValidator<RefreshTokenRequest> refreshValidator,
     IValidator<ForgotPasswordRequest> forgotPasswordValidator,
     IValidator<ResetPasswordRequest> resetPasswordValidator,
@@ -27,17 +29,23 @@ public sealed class AuthService(
 {
     private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(30);
     private static readonly TimeSpan PasswordResetLifetime = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan EmailVerificationLifetime = TimeSpan.FromHours(24);
+    private const string VerificationRequiredMessage =
+        "Registration accepted. Verify your email address before signing in.";
+    private const string ResendMessage =
+        "If an unverified account exists, a verification message will be sent.";
 
-    public async Task<AuthenticationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
+    public async Task<RegistrationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
         await registerValidator.ValidateAndThrowAsync(request, cancellationToken);
         var normalizedEmail = NormalizeEmail(request.Email);
 
         if (await users.GetByNormalizedEmailAsync(normalizedEmail, cancellationToken) is not null)
         {
-            throw new ConflictException("An account with that email address already exists.");
+            return new RegistrationResponse(VerificationRequiredMessage);
         }
 
+        var token = GenerateSecureToken();
         var user = new User
         {
             Email = request.Email.Trim(),
@@ -46,15 +54,19 @@ public sealed class AuthService(
             FirstName = request.FirstName.Trim(),
             LastName = request.LastName.Trim(),
             PhoneNumber = string.IsNullOrWhiteSpace(request.PhoneNumber) ? null : request.PhoneNumber.Trim(),
-            Status = UserStatus.Active,
+            Status = UserStatus.Pending,
+            EmailConfirmed = false,
+            EmailVerificationTokenHash = HashToken(token),
+            EmailVerificationTokenExpiresAtUtc = UtcNow.Add(EmailVerificationLifetime),
+            EmailVerificationSentAtUtc = UtcNow,
             RoleId = SystemRoleIds.Candidate,
             Role = new Role { Id = SystemRoleIds.Candidate, Name = "Candidate", NormalizedName = "CANDIDATE" }
         };
 
         await users.AddAsync(user, cancellationToken);
-        var response = await IssueTokensAsync(user, null, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return response;
+        _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
+        return new RegistrationResponse(VerificationRequiredMessage);
     }
 
     public async Task<AuthenticationResponse> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default)
@@ -62,10 +74,13 @@ public sealed class AuthService(
         await loginValidator.ValidateAndThrowAsync(request, cancellationToken);
         var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
 
-        if (user is null || user.Status != UserStatus.Active || !passwordHasher.Verify(request.Password, user.PasswordHash))
+        if (user is null || !passwordHasher.Verify(request.Password, user.PasswordHash))
         {
             throw new UnauthorizedException("Invalid email address or password.");
         }
+        if (!user.EmailConfirmed) throw new EmailNotVerifiedException();
+        if (user.Status != UserStatus.Active)
+            throw new UnauthorizedException("Invalid email address or password.");
 
         user.LastLoginAtUtc = UtcNow;
         users.Update(user);
@@ -74,13 +89,53 @@ public sealed class AuthService(
         return response;
     }
 
+    public async Task<VerificationResponse> VerifyEmailAsync(
+        VerifyEmailRequest request, CancellationToken cancellationToken = default)
+    {
+        await verifyEmailValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
+        var suppliedHash = HashToken(request.Token);
+        if (user is null || user.EmailConfirmed || user.EmailVerificationTokenHash is null ||
+            user.EmailVerificationTokenExpiresAtUtc <= UtcNow ||
+            !FixedTimeEquals(user.EmailVerificationTokenHash, suppliedHash))
+            throw new BadRequestException("The email verification token is invalid or expired.", "invalid_verification_token");
+
+        user.EmailConfirmed = true;
+        user.Status = UserStatus.Active;
+        user.EmailVerificationTokenHash = null;
+        user.EmailVerificationTokenExpiresAtUtc = null;
+        users.Update(user);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return new VerificationResponse("Email verified successfully.");
+    }
+
+    public async Task<VerificationResponse> ResendVerificationAsync(
+        ResendVerificationRequest request, CancellationToken cancellationToken = default)
+    {
+        await resendVerificationValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
+        if (user is null || user.EmailConfirmed || user.RoleId != SystemRoleIds.Candidate)
+            return new VerificationResponse(ResendMessage);
+
+        var token = GenerateSecureToken();
+        user.EmailVerificationTokenHash = HashToken(token);
+        user.EmailVerificationTokenExpiresAtUtc = UtcNow.Add(EmailVerificationLifetime);
+        user.EmailVerificationSentAtUtc = UtcNow;
+        users.Update(user);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
+        return new VerificationResponse(ResendMessage);
+    }
+
     public async Task<AuthenticationResponse> RefreshAsync(RefreshTokenRequest request, string? ipAddress, CancellationToken cancellationToken = default)
     {
         await refreshValidator.ValidateAndThrowAsync(request, cancellationToken);
         var tokenHash = jwtTokenService.HashToken(request.RefreshToken);
         var existingToken = await refreshTokens.GetByTokenHashAsync(tokenHash, cancellationToken);
 
-        if (existingToken is null || existingToken.RevokedAtUtc is not null || existingToken.ExpiresAtUtc <= UtcNow || existingToken.User.Status != UserStatus.Active)
+        if (existingToken is null || existingToken.RevokedAtUtc is not null ||
+            existingToken.ExpiresAtUtc <= UtcNow || existingToken.User.Status != UserStatus.Active ||
+            !existingToken.User.EmailConfirmed)
         {
             throw new UnauthorizedException("The refresh token is invalid or expired.");
         }
@@ -109,7 +164,7 @@ public sealed class AuthService(
         user.PasswordResetTokenExpiresAtUtc = UtcNow.Add(PasswordResetLifetime);
         users.Update(user);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        await emailService.SendPasswordResetAsync(user, token, cancellationToken);
+        _ = await emailService.SendPasswordResetAsync(user, token, cancellationToken);
     }
 
     public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)
@@ -185,5 +240,15 @@ public sealed class AuthService(
     }
 
     private static string NormalizeEmail(string email) => email.Trim().ToUpperInvariant();
+    private static string GenerateSecureToken()
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+    private static string HashToken(string token) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
+    private static bool FixedTimeEquals(string expected, string actual) =>
+        CryptographicOperations.FixedTimeEquals(
+            Convert.FromHexString(expected), Convert.FromHexString(actual));
     private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
 }

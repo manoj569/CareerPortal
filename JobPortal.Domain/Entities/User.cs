@@ -19,6 +19,9 @@ public sealed class User : BaseEntity
     public DateTime? LastLoginAtUtc { get; set; }
     public string? PasswordResetTokenHash { get; set; }
     public DateTime? PasswordResetTokenExpiresAtUtc { get; set; }
+    public string? EmailVerificationTokenHash { get; set; }
+    public DateTime? EmailVerificationTokenExpiresAtUtc { get; set; }
+    public DateTime? EmailVerificationSentAtUtc { get; set; }
     public Guid RoleId { get; set; }
     public Role Role { get; set; } = null!;
     public ICollection<RefreshToken> RefreshTokens { get; set; } = new List<RefreshToken>();

@@ -62,6 +62,14 @@ existing non-Administrator account.
 - Output caching is restricted to anonymous public-job reads and varies by query and origin.
 - Forwarded headers are accepted only from configured trusted proxies.
 
+## Transactional email
+
+Email verification and password reset use direct SMTP delivery after token state has been
+committed. Configure SMTP credentials through User Secrets or a production secret manager and
+set `Email:Enabled` only when all required email settings are available. Delivery failures do not
+roll back token state, allowing resend or another password-reset request to recover. A durable
+transactional outbox should be considered before scaling production delivery.
+
 ## Scaling guidance
 
 - API instances are stateless and can scale horizontally.

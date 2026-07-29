@@ -2,6 +2,7 @@ using System.Security.Claims;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Application.Common.Exceptions;
 using JobPortal.Application.Features.Authentication;
+using JobPortal.Shared.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
@@ -16,8 +17,8 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
 {
     [HttpPost("register")]
     [AllowAnonymous]
-    [ProducesResponseType(typeof(AuthenticationResponse), StatusCodes.Status201Created)]
-    public async Task<ActionResult<AuthenticationResponse>> Register(RegisterRequest request, CancellationToken cancellationToken)
+    [ProducesResponseType(typeof(RegistrationResponse), StatusCodes.Status201Created)]
+    public async Task<ActionResult<RegistrationResponse>> Register(RegisterRequest request, CancellationToken cancellationToken)
     {
         var response = await authService.RegisterAsync(request, cancellationToken);
         return StatusCode(StatusCodes.Status201Created, response);
@@ -26,8 +27,29 @@ public sealed class AuthController(IAuthService authService) : ControllerBase
     [HttpPost("login")]
     [AllowAnonymous]
     [ProducesResponseType(typeof(AuthenticationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<AuthenticationResponse>> Login(LoginRequest request, CancellationToken cancellationToken) =>
         Ok(await authService.LoginAsync(request, HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken));
+
+    [HttpPost("verify-email")]
+    [AllowAnonymous]
+    [EnableRateLimiting("EmailVerification")]
+    [ProducesResponseType(typeof(VerificationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<VerificationResponse>> VerifyEmail(
+        VerifyEmailRequest request, CancellationToken cancellationToken) =>
+        Ok(await authService.VerifyEmailAsync(request, cancellationToken));
+
+    [HttpPost("resend-verification")]
+    [AllowAnonymous]
+    [EnableRateLimiting("EmailVerification")]
+    [ProducesResponseType(typeof(VerificationResponse), StatusCodes.Status202Accepted)]
+    public async Task<ActionResult<VerificationResponse>> ResendVerification(
+        ResendVerificationRequest request, CancellationToken cancellationToken)
+    {
+        var response = await authService.ResendVerificationAsync(request, cancellationToken);
+        return Accepted(response);
+    }
 
     [HttpPost("refresh")]
     [AllowAnonymous]

@@ -33,6 +33,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.Headline).HasMaxLength(250);
         builder.Property(x => x.Bio).HasMaxLength(4000);
         builder.Property(x => x.PasswordResetTokenHash).HasMaxLength(64);
+        builder.Property(x => x.EmailVerificationTokenHash).HasMaxLength(64);
         builder.HasIndex(x => x.NormalizedEmail).IsUnique().HasFilter("[IsDeleted] = 0");
         builder.HasIndex(x => new { x.Status, x.IsDeleted });
         builder.HasIndex(x => x.CreatedAtUtc);

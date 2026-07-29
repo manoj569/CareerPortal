@@ -15,6 +15,8 @@ public sealed class AuthExamplesOperationFilter : IOperationFilter
         {
             "Register" => Object(("email", "candidate@example.com"), ("password", "Str0ng!Password2026"), ("firstName", "Avery"), ("lastName", "Patel"), ("phoneNumber", "+15551234567")),
             "Login" => Object(("email", "candidate@example.com"), ("password", "Str0ng!Password2026")),
+            "VerifyEmail" => Object(("email", "candidate@example.com"), ("token", "verification-token-from-email")),
+            "ResendVerification" => Object(("email", "candidate@example.com")),
             "Refresh" or "Logout" => Object(("refreshToken", "Base64 refresh token")),
             "ForgotPassword" => Object(("email", "candidate@example.com")),
             "ResetPassword" => Object(("email", "candidate@example.com"), ("token", "reset-token-from-email"), ("newPassword", "N3w!StrongerPassword")),

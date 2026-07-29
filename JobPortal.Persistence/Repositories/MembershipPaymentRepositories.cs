@@ -29,6 +29,7 @@ public sealed class MembershipRepository(
         return context.Memberships.AsNoTracking().SingleOrDefaultAsync(x =>
             x.UserId == userId &&
             x.Status == MembershipStatus.Active &&
+            x.StartsAtUtc <= utcNow &&
             (!x.EndsAtUtc.HasValue || x.EndsAtUtc > utcNow), cancellationToken);
     }
 
@@ -88,6 +89,23 @@ public sealed class PaymentRepository(JobPortalDbContext context) : IPaymentRepo
             .Include(x => x.History)
             .SingleOrDefaultAsync(x => x.Id == id && x.UserId == userId, cancellationToken);
 
+    public Task<Payment?> GetByProviderOrderIdAsync(
+        string providerOrderId, CancellationToken cancellationToken = default) =>
+        context.Payments.Include(x => x.Membership!).ThenInclude(x => x.History)
+            .Include(x => x.History)
+            .SingleOrDefaultAsync(x => x.ProviderOrderId == providerOrderId, cancellationToken);
+
+    public Task<Payment?> GetLatestForUserAsync(
+        Guid userId, CancellationToken cancellationToken = default) =>
+        context.Payments.AsNoTracking().Where(x => x.UserId == userId)
+            .OrderByDescending(x => x.CreatedAtUtc).ThenByDescending(x => x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    public Task<bool> HasProcessedProviderEventAsync(
+        string providerEventId, CancellationToken cancellationToken = default) =>
+        context.PaymentHistories.IgnoreQueryFilters().AsNoTracking()
+            .AnyAsync(x => x.ProviderEventId == providerEventId, cancellationToken);
+
     public async Task<(IReadOnlyCollection<PaymentResponse> Items, int TotalCount)> GetForUserAsync(
         Guid userId, HistoryQuery query, CancellationToken cancellationToken = default)
     {
@@ -96,7 +114,8 @@ public sealed class PaymentRepository(JobPortalDbContext context) : IPaymentRepo
         var items = await source.OrderByDescending(x => x.CreatedAtUtc).ThenByDescending(x => x.Id)
             .Skip((query.PageNumber - 1) * query.PageSize).Take(query.PageSize)
             .Select(x => new PaymentResponse(x.Id, x.Amount, x.CurrencyCode, x.Status, x.Provider,
-                x.ProviderOrderId, x.ProviderPaymentId, x.PaidAtUtc, x.MembershipId, x.CreatedAtUtc))
+                x.ProviderOrderId, x.ProviderPaymentId, x.PaidAtUtc, x.MembershipId, x.CreatedAtUtc,
+                x.ProviderOrderCreatedAtUtc, x.LastReconciledAtUtc))
             .ToArrayAsync(cancellationToken);
         return (items, count);
     }

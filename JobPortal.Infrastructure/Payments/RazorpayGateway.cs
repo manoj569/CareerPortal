@@ -15,13 +15,15 @@ public sealed class RazorpayGateway : IRazorpayGateway
         Timeout = TimeSpan.FromSeconds(15)
     };
     private readonly string _keySecret;
+    private readonly string _webhookSecret;
 
     public RazorpayGateway(IConfiguration configuration)
     {
-        KeyId = configuration["Razorpay:KeyId"]
-            ?? throw new InvalidOperationException("Razorpay KeyId is not configured.");
-        _keySecret = configuration["Razorpay:KeySecret"]
-            ?? throw new InvalidOperationException("Razorpay KeySecret is not configured.");
+        KeyId = RequiredSecret(configuration, "Razorpay:KeyId");
+        _keySecret = RequiredSecret(configuration, "Razorpay:KeySecret");
+        _webhookSecret = RequiredSecret(configuration, "Razorpay:WebhookSecret");
+        if (!KeyId.StartsWith("rzp_test_", StringComparison.Ordinal))
+            throw new InvalidOperationException("Only a Razorpay Test Mode KeyId is permitted.");
     }
 
     public string KeyId { get; }
@@ -31,8 +33,7 @@ public sealed class RazorpayGateway : IRazorpayGateway
         CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "orders");
-        request.Headers.Authorization = new AuthenticationHeaderValue(
-            "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{KeyId}:{_keySecret}")));
+        AddAuthorization(request);
         request.Content = new StringContent(JsonSerializer.Serialize(new
         {
             amount = amountInMinorUnits,
@@ -54,9 +55,56 @@ public sealed class RazorpayGateway : IRazorpayGateway
 
     public bool VerifyPaymentSignature(string orderId, string paymentId, string signature)
     {
-        var expected = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes(_keySecret),
-            Encoding.UTF8.GetBytes($"{orderId}|{paymentId}"));
+        var payload = Encoding.UTF8.GetBytes($"{orderId}|{paymentId}");
+        return VerifySignature(payload, signature, _keySecret);
+    }
+
+    public bool VerifyWebhookSignature(ReadOnlyMemory<byte> payload, string signature) =>
+        VerifySignature(payload.Span, signature, _webhookSecret);
+
+    public async Task<RazorpayPaymentState> GetOrderPaymentStateAsync(
+        string orderId, CancellationToken cancellationToken = default)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get, $"orders/{Uri.EscapeDataString(orderId)}/payments");
+        AddAuthorization(request);
+        using var response = await Client.SendAsync(request, cancellationToken);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        response.EnsureSuccessStatusCode();
+        using var document = JsonDocument.Parse(body);
+        RazorpayPaymentState? failed = null;
+        var hasPendingPayment = false;
+        foreach (var item in document.RootElement.GetProperty("items").EnumerateArray())
+        {
+            if (!string.Equals(item.GetProperty("order_id").GetString(), orderId, StringComparison.Ordinal))
+                continue;
+            var id = item.GetProperty("id").GetString();
+            var status = item.GetProperty("status").GetString();
+            var amount = item.GetProperty("amount").GetInt64();
+            var currency = item.GetProperty("currency").GetString();
+            if (status is "captured")
+                return new(RazorpayPaymentStateKind.Paid, id, amount, currency);
+            if (status is "failed")
+                failed = new(RazorpayPaymentStateKind.Failed, id, amount, currency);
+            else if (status is "cancelled")
+                failed = new(RazorpayPaymentStateKind.Cancelled, id, amount, currency);
+            else if (status is "expired")
+                failed = new(RazorpayPaymentStateKind.Expired, id, amount, currency);
+            else
+                hasPendingPayment = true;
+        }
+        return hasPendingPayment ? new(RazorpayPaymentStateKind.Pending) :
+            failed ?? new(RazorpayPaymentStateKind.Pending);
+    }
+
+    private void AddAuthorization(HttpRequestMessage request) =>
+        request.Headers.Authorization = new AuthenticationHeaderValue(
+            "Basic", Convert.ToBase64String(Encoding.UTF8.GetBytes($"{KeyId}:{_keySecret}")));
+
+    private static bool VerifySignature(
+        ReadOnlySpan<byte> payload, string signature, string secret)
+    {
+        var expected = HMACSHA256.HashData(Encoding.UTF8.GetBytes(secret), payload);
         return TryDecodeHex(signature, out var supplied) &&
                CryptographicOperations.FixedTimeEquals(expected, supplied);
     }
@@ -66,6 +114,15 @@ public sealed class RazorpayGateway : IRazorpayGateway
         try { bytes = Convert.FromHexString(value); return true; }
         catch (FormatException) { bytes = []; return false; }
     }
+
+    private static string RequiredSecret(IConfiguration configuration, string key)
+    {
+        var value = configuration[key];
+        if (string.IsNullOrWhiteSpace(value) ||
+            value.StartsWith("CONFIGURE_", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"{key} must be configured through User Secrets or an environment variable.");
+        return value;
+    }
 }
 
 public sealed class ConfigurationMembershipPlanProvider(IConfiguration configuration) : IMembershipPlanProvider
@@ -73,12 +130,19 @@ public sealed class ConfigurationMembershipPlanProvider(IConfiguration configura
     public MembershipPlan GetDefaultPlan()
     {
         var section = configuration.GetSection("Membership:DefaultPlan");
-        var name = section["Name"] ?? "Job Application Access";
-        var currency = section["CurrencyCode"] ?? "INR";
-        if (!decimal.TryParse(section["Amount"], out var amount) || amount <= 0)
-            throw new InvalidOperationException("Membership plan amount must be configured and greater than zero.");
-        if (!int.TryParse(section["DurationDays"], out var duration) || duration <= 0)
-            throw new InvalidOperationException("Membership plan duration must be configured and greater than zero.");
-        return new MembershipPlan(name, amount, currency, duration);
+        var name = section["Name"];
+        var currency = section["CurrencyCode"];
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 100)
+            throw new InvalidOperationException(
+                "Membership plan name must contain between 1 and 100 characters.");
+        if (!decimal.TryParse(
+                section["Amount"], System.Globalization.CultureInfo.InvariantCulture, out var amount) ||
+            amount != 99m)
+            throw new InvalidOperationException("The portal membership amount must be INR 99.");
+        if (!string.Equals(currency, "INR", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The portal membership currency must be INR.");
+        if (!int.TryParse(section["DurationDays"], out var duration) || duration != 30)
+            throw new InvalidOperationException("The portal membership duration must be 30 days.");
+        return new MembershipPlan(name, amount, "INR", duration);
     }
 }

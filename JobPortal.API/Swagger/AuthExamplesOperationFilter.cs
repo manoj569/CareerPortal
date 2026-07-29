@@ -21,6 +21,11 @@ public sealed class AuthExamplesOperationFilter : IOperationFilter
             "ForgotPassword" => Object(("email", "candidate@example.com")),
             "ResetPassword" => Object(("email", "candidate@example.com"), ("token", "reset-token-from-email"), ("newPassword", "N3w!StrongerPassword")),
             "ChangePassword" => Object(("currentPassword", "Str0ng!Password2026"), ("newPassword", "N3w!StrongerPassword")),
+            "CreateOrder" => new OpenApiObject(),
+            "Confirm" => Object(
+                ("razorpayOrderId", "order_test_example"),
+                ("razorpayPaymentId", "pay_test_example"),
+                ("razorpaySignature", new string('a', 64))),
             _ => null
         };
     }

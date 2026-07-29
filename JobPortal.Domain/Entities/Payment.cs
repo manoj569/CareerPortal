@@ -13,6 +13,8 @@ public sealed class Payment : BaseEntity
     public string? ProviderPaymentId { get; set; }
     public string? ProviderOrderId { get; set; }
     public string? ProviderReceipt { get; set; }
+    public DateTime? ProviderOrderCreatedAtUtc { get; set; }
+    public DateTime? LastReconciledAtUtc { get; set; }
     public DateTime? PaidAtUtc { get; set; }
     public byte[] RowVersion { get; set; } = [];
     public Guid UserId { get; set; }

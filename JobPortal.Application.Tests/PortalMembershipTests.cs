@@ -1,9 +1,12 @@
+using System.Text;
+using System.Text.Json;
 using FluentValidation;
 using JobPortal.Application.Abstractions.Payments;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
 using JobPortal.Application.Features.Memberships;
 using JobPortal.Application.Features.Payments;
+using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
 using Xunit;
@@ -13,6 +16,8 @@ namespace JobPortal.Application.Tests;
 public sealed class PortalMembershipTests
 {
     private static readonly Guid UserId = Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private static readonly Guid OtherCandidateId = Guid.Parse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    private static readonly DateTime Now = new(2026, 7, 29, 12, 0, 0, DateTimeKind.Utc);
 
     [Fact]
     public async Task ActiveMembershipGrantsJobsFromDifferentCompanies()
@@ -70,7 +75,7 @@ public sealed class PortalMembershipTests
         {
             UserId = UserId,
             Status = MembershipStatus.Active,
-            EndsAtUtc = DateTime.UtcNow.AddMinutes(-1)
+            EndsAtUtc = Now.AddMinutes(-1)
         };
         var service = new MembershipService(repository, new FakeUnitOfWork());
 
@@ -80,70 +85,217 @@ public sealed class PortalMembershipTests
     }
 
     [Fact]
-    public async Task ExistingActiveMembershipRejectsDuplicateOrder()
+    public async Task ActiveOrPendingMembershipRejectsAnotherOrder()
     {
-        var memberships = AvailableRepository();
-        memberships.Membership = new Membership { UserId = UserId, Status = MembershipStatus.Active };
-        var service = CreatePaymentService(memberships, new FakePaymentRepository(), new FakeRazorpayGateway());
-
+        var fixture = CreatePaymentFixture();
+        fixture.Memberships.Membership = new Membership
+        {
+            UserId = UserId,
+            Status = MembershipStatus.Active,
+            StartsAtUtc = Now,
+            EndsAtUtc = Now.AddDays(1)
+        };
         await Assert.ThrowsAsync<ConflictException>(
-            () => service.CreateOrderAsync(UserId, new CreatePaymentOrderRequest()));
-    }
+            () => fixture.Service.CreateOrderAsync(UserId, new()));
 
-    [Fact]
-    public async Task PendingMembershipRejectsDuplicateOrder()
-    {
-        var memberships = AvailableRepository();
-        memberships.Membership = new Membership { UserId = UserId, Status = MembershipStatus.Pending };
-        var service = CreatePaymentService(memberships, new FakePaymentRepository(), new FakeRazorpayGateway());
-
+        fixture.Memberships.Membership.Status = MembershipStatus.Pending;
         await Assert.ThrowsAsync<ConflictException>(
-            () => service.CreateOrderAsync(UserId, new CreatePaymentOrderRequest()));
+            () => fixture.Service.CreateOrderAsync(UserId, new()));
+        Assert.Equal(0, fixture.Gateway.CreateOrderCalls);
     }
 
     [Fact]
-    public async Task OrderUsesServerPlanAndConfirmationActivatesPortalMembership()
+    public async Task PurchaseRequiresVerifiedActiveCandidate()
     {
-        var memberships = AvailableRepository();
-        var payments = new FakePaymentRepository();
-        var gateway = new FakeRazorpayGateway();
-        var service = CreatePaymentService(memberships, payments, gateway);
+        var fixture = CreatePaymentFixture();
+        fixture.Users.IsEligible = false;
 
-        var order = await service.CreateOrderAsync(UserId, new CreatePaymentOrderRequest());
-        var response = await service.ConfirmAsync(UserId, order.PaymentId,
-            new ConfirmRazorpayPaymentRequest(order.ProviderOrderId, "pay_1", new('a', 64)));
-
-        Assert.Equal(12345, gateway.RequestedAmount);
-        Assert.Equal(PaymentStatus.Paid, response.Status);
-        Assert.Equal(MembershipStatus.Active, memberships.Membership!.Status);
-        Assert.NotNull(memberships.Membership.EndsAtUtc);
+        await Assert.ThrowsAsync<UnauthorizedException>(
+            () => fixture.Service.CreateOrderAsync(UserId, new()));
+        Assert.Equal(0, fixture.Gateway.CreateOrderCalls);
     }
 
     [Fact]
-    public async Task InvalidSignatureDoesNotActivateMembership()
+    public async Task OrderUsesOnlyTrustedPlanAndIsPersistedBeforeProviderCall()
     {
-        var memberships = AvailableRepository();
-        var payments = new FakePaymentRepository();
-        var gateway = new FakeRazorpayGateway { SignatureIsValid = false };
-        var service = CreatePaymentService(memberships, payments, gateway);
-        var order = await service.CreateOrderAsync(UserId, new CreatePaymentOrderRequest());
+        var fixture = CreatePaymentFixture();
+        fixture.Gateway.BeforeCreateOrder = () =>
+            fixture.Payments.Payment?.Status == PaymentStatus.Created &&
+            fixture.UnitOfWork.SaveCount > 0;
 
-        await Assert.ThrowsAsync<BadRequestException>(() => service.ConfirmAsync(
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+
+        Assert.Equal(9900, fixture.Gateway.RequestedAmount);
+        Assert.Equal("INR", fixture.Gateway.RequestedCurrency);
+        Assert.True(fixture.Gateway.LocalOrderWasPersisted);
+        Assert.Equal(9900, order.AmountInMinorUnits);
+        Assert.Equal("INR", order.CurrencyCode);
+        Assert.Equal(99m, fixture.Payments.Payment!.Amount);
+        Assert.Equal(PaymentStatus.Pending, fixture.Payments.Payment.Status);
+    }
+
+    [Fact]
+    public async Task ConfirmationEnforcesOwnershipAndStoredOrder()
+    {
+        var fixture = CreatePaymentFixture();
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+
+        await Assert.ThrowsAsync<NotFoundException>(() => fixture.Service.ConfirmAsync(
+            OtherCandidateId, order.PaymentId,
+            new(order.ProviderOrderId, "pay_1", new('a', 64))));
+        await Assert.ThrowsAsync<ConflictException>(() => fixture.Service.ConfirmAsync(
             UserId, order.PaymentId,
-            new ConfirmRazorpayPaymentRequest(order.ProviderOrderId, "pay_1", new('a', 64))));
-        Assert.NotEqual(MembershipStatus.Active, memberships.Membership!.Status);
+            new("order_other", "pay_1", new('a', 64))));
     }
+
+    [Fact]
+    public async Task BadSignatureDoesNotActivateMembership()
+    {
+        var fixture = CreatePaymentFixture();
+        fixture.Gateway.PaymentSignatureIsValid = false;
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+
+        await Assert.ThrowsAsync<BadRequestException>(() => fixture.Service.ConfirmAsync(
+            UserId, order.PaymentId,
+            new(order.ProviderOrderId, "pay_1", new('a', 64))));
+
+        Assert.Equal(PaymentStatus.Pending, fixture.Payments.Payment!.Status);
+        Assert.NotEqual(MembershipStatus.Active, fixture.Memberships.Membership!.Status);
+    }
+
+    [Fact]
+    public async Task ValidBrowserSignatureStillRequiresProviderCapture()
+    {
+        var fixture = CreatePaymentFixture();
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+        fixture.Gateway.ReconciliationState = new(RazorpayPaymentStateKind.Pending);
+
+        await Assert.ThrowsAsync<ConflictException>(() => fixture.Service.ConfirmAsync(
+            UserId, order.PaymentId,
+            new(order.ProviderOrderId, "pay_1", new('a', 64))));
+
+        Assert.Equal(PaymentStatus.Pending, fixture.Payments.Payment!.Status);
+        Assert.NotEqual(MembershipStatus.Active, fixture.Memberships.Membership!.Status);
+    }
+
+    [Fact]
+    public async Task DuplicateConfirmationIsIdempotentAndActivatesOnlyThirtyDaysOnce()
+    {
+        var fixture = CreatePaymentFixture();
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+        var request = new ConfirmRazorpayPaymentRequest(
+            order.ProviderOrderId, "pay_1", new('a', 64));
+
+        await fixture.Service.ConfirmAsync(UserId, order.PaymentId, request);
+        var firstEnd = fixture.Memberships.Membership!.EndsAtUtc;
+        var duplicate = await fixture.Service.ConfirmAsync(UserId, order.PaymentId, request);
+
+        Assert.Equal(PaymentStatus.Paid, duplicate.Status);
+        Assert.Equal(Now.AddDays(30), firstEnd);
+        Assert.Equal(firstEnd, fixture.Memberships.Membership.EndsAtUtc);
+        Assert.Single(fixture.Payments.Payment!.History, x => x.CurrentStatus == PaymentStatus.Paid);
+    }
+
+    [Fact]
+    public async Task WebhookRejectsBadSignatureAndProcessesSuccessIdempotently()
+    {
+        var fixture = CreatePaymentFixture();
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+        var body = Webhook("payment.captured", order.ProviderOrderId, "pay_webhook", "captured");
+        fixture.Gateway.WebhookSignatureIsValid = false;
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            fixture.Service.ProcessWebhookAsync(new(body, new('a', 64), "event_1")));
+
+        fixture.Gateway.WebhookSignatureIsValid = true;
+        await fixture.Service.ProcessWebhookAsync(new(body, new('b', 64), "event_1"));
+        var firstEnd = fixture.Memberships.Membership!.EndsAtUtc;
+        var duplicate = await fixture.Service.ProcessWebhookAsync(new(body, new('b', 64), "event_1"));
+
+        Assert.Equal(PaymentStatus.Paid, fixture.Payments.Payment!.Status);
+        Assert.Equal(firstEnd, fixture.Memberships.Membership.EndsAtUtc);
+        Assert.Contains("Duplicate", duplicate.Outcome, StringComparison.Ordinal);
+        Assert.Single(fixture.Payments.Payment.History, x => x.ProviderEventId == "event_1");
+    }
+
+    [Fact]
+    public async Task FailedWebhookDoesNotActivateMembership()
+    {
+        var fixture = CreatePaymentFixture();
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+        var body = Webhook("payment.failed", order.ProviderOrderId, "pay_failed", "failed");
+
+        await fixture.Service.ProcessWebhookAsync(new(body, new('b', 64), "event_failed"));
+
+        Assert.Equal(PaymentStatus.Failed, fixture.Payments.Payment!.Status);
+        Assert.Equal(MembershipStatus.Cancelled, fixture.Memberships.Membership!.Status);
+    }
+
+    [Fact]
+    public async Task ReconciliationNeverMarksPendingAsPaidWithoutProviderCapture()
+    {
+        var fixture = CreatePaymentFixture();
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+        fixture.Gateway.ReconciliationState = new(RazorpayPaymentStateKind.Pending);
+
+        var pending = await fixture.Service.ReconcileAsync(UserId, order.PaymentId);
+
+        Assert.Equal(PaymentStatus.Pending, pending.Status);
+        Assert.NotEqual(MembershipStatus.Active, fixture.Memberships.Membership!.Status);
+
+        fixture.Gateway.ReconciliationState =
+            new(RazorpayPaymentStateKind.Paid, "pay_reconciled", 9900, "INR");
+        var paid = await fixture.Service.ReconcileAsync(UserId, order.PaymentId);
+        Assert.Equal(PaymentStatus.Paid, paid.Status);
+        Assert.Equal(MembershipStatus.Active, fixture.Memberships.Membership.Status);
+    }
+
+    private static byte[] Webhook(
+        string eventName, string orderId, string paymentId, string status) =>
+        Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            @event = eventName,
+            payload = new
+            {
+                payment = new
+                {
+                    entity = new
+                    {
+                        id = paymentId,
+                        order_id = orderId,
+                        amount = 9900,
+                        currency = "INR",
+                        status
+                    }
+                }
+            }
+        }));
 
     private static FakeMembershipRepository AvailableRepository() => new()
     {
         Jobs = { ["job"] = new(Guid.NewGuid(), "https://example.test/apply") }
     };
 
-    private static PaymentService CreatePaymentService(
-        FakeMembershipRepository memberships, FakePaymentRepository payments, FakeRazorpayGateway gateway) =>
-        new(payments, memberships, gateway, new FakePlanProvider(), new FakeUnitOfWork(),
+    private static PaymentFixture CreatePaymentFixture()
+    {
+        var memberships = AvailableRepository();
+        var payments = new FakePaymentRepository();
+        var users = new FakeUserRepository();
+        var gateway = new FakeRazorpayGateway();
+        var unitOfWork = new FakeUnitOfWork();
+        var service = new PaymentService(
+            payments, memberships, users, gateway, new FakePlanProvider(), unitOfWork,
             new CreatePaymentOrderRequestValidator(), new ConfirmRazorpayPaymentRequestValidator(),
-            TimeProvider.System);
+            new FixedTimeProvider(Now));
+        return new(service, memberships, payments, users, gateway, unitOfWork);
+    }
+
+    private sealed record PaymentFixture(
+        PaymentService Service,
+        FakeMembershipRepository Memberships,
+        FakePaymentRepository Payments,
+        FakeUserRepository Users,
+        FakeRazorpayGateway Gateway,
+        FakeUnitOfWork UnitOfWork);
 
     private sealed class FakeMembershipRepository : IMembershipRepository
     {
@@ -151,26 +303,35 @@ public sealed class PortalMembershipTests
         public List<Guid> RecordedApplications { get; } = [];
         public Membership? Membership { get; set; }
 
-        public Task<AvailableJobAccess?> GetAvailableJobAsync(string slug, CancellationToken cancellationToken = default) =>
+        public Task<AvailableJobAccess?> GetAvailableJobAsync(
+            string slug, CancellationToken cancellationToken = default) =>
             Task.FromResult(Jobs.GetValueOrDefault(slug));
-        public Task<Membership?> GetActiveForUserAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        public Task<Membership?> GetActiveForUserAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Membership is { Status: MembershipStatus.Active } membership &&
-                (!membership.EndsAtUtc.HasValue || membership.EndsAtUtc > DateTime.UtcNow) ? membership : null);
-        public Task<Membership?> GetPortalMembershipForUserAsync(Guid userId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Membership);
-        public Task<Membership?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+                membership.StartsAtUtc <= Now &&
+                (!membership.EndsAtUtc.HasValue || membership.EndsAtUtc > Now)
+                    ? membership
+                    : null);
+        public Task<Membership?> GetPortalMembershipForUserAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Membership?.UserId == userId ? Membership : null);
+        public Task<Membership?> GetByIdAsync(
+            Guid id, CancellationToken cancellationToken = default) =>
             Task.FromResult(Membership?.Id == id ? Membership : null);
         public Task AddAsync(Membership membership, CancellationToken cancellationToken = default)
         {
             Membership = membership;
             return Task.CompletedTask;
         }
-        public Task<IReadOnlyCollection<MembershipResponse>> GetMembershipsForUserAsync(Guid userId, CancellationToken cancellationToken = default) =>
+        public Task<IReadOnlyCollection<MembershipResponse>> GetMembershipsForUserAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyCollection<MembershipResponse>>([]);
         public Task<(IReadOnlyCollection<MembershipHistoryResponse> Items, int TotalCount)> GetHistoryAsync(
             Guid userId, HistoryQuery query, CancellationToken cancellationToken = default) =>
             Task.FromResult(((IReadOnlyCollection<MembershipHistoryResponse>)[], 0));
-        public Task RecordApplicationAsync(Guid userId, Guid jobId, CancellationToken cancellationToken = default)
+        public Task RecordApplicationAsync(
+            Guid userId, Guid jobId, CancellationToken cancellationToken = default)
         {
             RecordedApplications.Add(jobId);
             return Task.CompletedTask;
@@ -179,15 +340,25 @@ public sealed class PortalMembershipTests
 
     private sealed class FakePaymentRepository : IPaymentRepository
     {
-        private Payment? _payment;
+        public Payment? Payment { get; private set; }
         public Task AddAsync(Payment payment, CancellationToken cancellationToken = default)
         {
-            _payment = payment;
+            Payment = payment;
             payment.MembershipId = payment.Membership?.Id;
             return Task.CompletedTask;
         }
-        public Task<Payment?> GetOwnedAsync(Guid id, Guid userId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(_payment?.Id == id && _payment.UserId == userId ? _payment : null);
+        public Task<Payment?> GetOwnedAsync(
+            Guid id, Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Payment?.Id == id && Payment.UserId == userId ? Payment : null);
+        public Task<Payment?> GetByProviderOrderIdAsync(
+            string providerOrderId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Payment?.ProviderOrderId == providerOrderId ? Payment : null);
+        public Task<Payment?> GetLatestForUserAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Payment?.UserId == userId ? Payment : null);
+        public Task<bool> HasProcessedProviderEventAsync(
+            string providerEventId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Payment?.History.Any(x => x.ProviderEventId == providerEventId) == true);
         public Task<(IReadOnlyCollection<PaymentResponse> Items, int TotalCount)> GetForUserAsync(
             Guid userId, HistoryQuery query, CancellationToken cancellationToken = default) =>
             Task.FromResult(((IReadOnlyCollection<PaymentResponse>)[], 0));
@@ -196,26 +367,81 @@ public sealed class PortalMembershipTests
             Task.FromResult(((IReadOnlyCollection<PaymentHistoryResponse>)[], 0));
     }
 
+    private sealed class FakeUserRepository : IUserRepository
+    {
+        public bool IsEligible { get; set; } = true;
+        public Task<User?> GetByNormalizedEmailAsync(
+            string normalizedEmail, CancellationToken cancellationToken = default) =>
+            Task.FromResult<User?>(null);
+        public Task<User?> GetByIdWithRoleAsync(
+            Guid userId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(IsEligible && userId is var id && (id == UserId || id == OtherCandidateId)
+                ? new User
+                {
+                    Id = id,
+                    RoleId = SystemRoleIds.Candidate,
+                    EmailConfirmed = true,
+                    Status = UserStatus.Active
+                }
+                : null);
+        public Task AddAsync(User user, CancellationToken cancellationToken = default) =>
+            Task.CompletedTask;
+        public void Update(User user) { }
+    }
+
     private sealed class FakeRazorpayGateway : IRazorpayGateway
     {
-        public string KeyId => "key_test";
+        public string KeyId => "rzp_test_key";
         public long RequestedAmount { get; private set; }
-        public bool SignatureIsValid { get; init; } = true;
-        public Task<RazorpayOrder> CreateOrderAsync(long amountInMinorUnits, string currencyCode, string receipt, CancellationToken cancellationToken = default)
+        public string? RequestedCurrency { get; private set; }
+        public int CreateOrderCalls { get; private set; }
+        public bool PaymentSignatureIsValid { get; set; } = true;
+        public bool WebhookSignatureIsValid { get; set; } = true;
+        public Func<bool>? BeforeCreateOrder { get; set; }
+        public bool LocalOrderWasPersisted { get; private set; }
+        public RazorpayPaymentState ReconciliationState { get; set; } =
+            new(RazorpayPaymentStateKind.Paid, "pay_1", 9900, "INR");
+
+        public Task<RazorpayOrder> CreateOrderAsync(
+            long amountInMinorUnits, string currencyCode, string receipt,
+            CancellationToken cancellationToken = default)
         {
+            CreateOrderCalls++;
             RequestedAmount = amountInMinorUnits;
-            return Task.FromResult(new RazorpayOrder("order_1", amountInMinorUnits, currencyCode, receipt));
+            RequestedCurrency = currencyCode;
+            LocalOrderWasPersisted = BeforeCreateOrder?.Invoke() ?? true;
+            return Task.FromResult(
+                new RazorpayOrder("order_1", amountInMinorUnits, currencyCode, receipt));
         }
-        public bool VerifyPaymentSignature(string orderId, string paymentId, string signature) => SignatureIsValid;
+        public bool VerifyPaymentSignature(
+            string orderId, string paymentId, string signature) =>
+            PaymentSignatureIsValid;
+        public bool VerifyWebhookSignature(
+            ReadOnlyMemory<byte> payload, string signature) =>
+            WebhookSignatureIsValid;
+        public Task<RazorpayPaymentState> GetOrderPaymentStateAsync(
+            string orderId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(ReconciliationState);
     }
 
     private sealed class FakePlanProvider : IMembershipPlanProvider
     {
-        public MembershipPlan GetDefaultPlan() => new("Portal", 123.45m, "INR", 30);
+        public MembershipPlan GetDefaultPlan() =>
+            new("Job Application Access", 99m, "INR", 30);
     }
 
     private sealed class FakeUnitOfWork : IUnitOfWork
     {
-        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => Task.FromResult(1);
+        public int SaveCount { get; private set; }
+        public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+        {
+            SaveCount++;
+            return Task.FromResult(1);
+        }
+    }
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 }

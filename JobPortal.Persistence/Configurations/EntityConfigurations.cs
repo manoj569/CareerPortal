@@ -200,11 +200,12 @@ public sealed class PaymentConfiguration : IEntityTypeConfiguration<Payment>
         builder.Property(x => x.ProviderPaymentId).HasMaxLength(200);
         builder.Property(x => x.ProviderOrderId).HasMaxLength(200);
         builder.Property(x => x.ProviderReceipt).HasMaxLength(100);
-        builder.HasIndex(x => x.ProviderPaymentId).IsUnique().HasFilter("[ProviderPaymentId] IS NOT NULL AND [IsDeleted] = 0");
-        builder.HasIndex(x => x.ProviderOrderId).IsUnique().HasFilter("[ProviderOrderId] IS NOT NULL AND [IsDeleted] = 0");
+        builder.HasIndex(x => x.ProviderPaymentId).IsUnique().HasFilter("[ProviderPaymentId] IS NOT NULL");
+        builder.HasIndex(x => x.ProviderOrderId).IsUnique().HasFilter("[ProviderOrderId] IS NOT NULL");
         builder.HasIndex(x => new { x.UserId, x.Status, x.CreatedAtUtc });
         builder.HasIndex(x => new { x.Status, x.PaidAtUtc, x.CurrencyCode });
         builder.HasIndex(x => new { x.Status, x.UserId });
+        builder.HasIndex(x => new { x.Status, x.ProviderOrderCreatedAtUtc });
         builder.HasIndex(x => x.CreatedAtUtc);
         builder.HasIndex(x => x.MembershipId);
         builder.HasOne(x => x.User).WithMany(x => x.Payments).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
@@ -236,7 +237,7 @@ public sealed class PaymentHistoryConfiguration : IEntityTypeConfiguration<Payme
         builder.Property(x => x.Reason).HasMaxLength(1000);
         builder.HasIndex(x => new { x.PaymentId, x.OccurredAtUtc });
         builder.HasIndex(x => new { x.UserId, x.OccurredAtUtc });
-        builder.HasIndex(x => x.ProviderEventId).IsUnique().HasFilter("[ProviderEventId] IS NOT NULL AND [IsDeleted] = 0");
+        builder.HasIndex(x => x.ProviderEventId).IsUnique().HasFilter("[ProviderEventId] IS NOT NULL");
         builder.HasOne(x => x.Payment).WithMany(x => x.History).HasForeignKey(x => x.PaymentId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
     }

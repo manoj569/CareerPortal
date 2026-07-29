@@ -1,9 +1,12 @@
+using System.Security.Cryptography;
+using System.Text.Json;
 using FluentValidation;
 using JobPortal.Application.Abstractions.Payments;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
 using JobPortal.Application.Common.Validation;
 using JobPortal.Application.Features.Memberships;
+using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
 using JobPortal.Shared.Models;
@@ -13,6 +16,7 @@ namespace JobPortal.Application.Features.Payments;
 public sealed class PaymentService(
     IPaymentRepository payments,
     IMembershipRepository memberships,
+    IUserRepository users,
     IRazorpayGateway razorpay,
     IMembershipPlanProvider plans,
     IUnitOfWork unitOfWork,
@@ -20,18 +24,25 @@ public sealed class PaymentService(
     IValidator<ConfirmRazorpayPaymentRequest> confirmValidator,
     TimeProvider timeProvider) : IPaymentService
 {
+    private const int MaximumWebhookBytes = 1024 * 1024;
+
     public async Task<PaymentOrderResponse> CreateOrderAsync(
         Guid userId, CreatePaymentOrderRequest request, CancellationToken cancellationToken = default)
     {
         await createOrderValidator.ValidateAndThrowAsync(request, cancellationToken);
-        if (await memberships.GetActiveForUserAsync(userId, cancellationToken) is not null)
-            throw new ConflictException("An active portal membership already exists.");
-
+        await RequiredCandidateAsync(userId, cancellationToken);
         var utcNow = UtcNow;
         var plan = plans.GetDefaultPlan();
         var membership = await memberships.GetPortalMembershipForUserAsync(userId, cancellationToken);
+        await ExpireMembershipIfNeededAsync(membership, userId, cancellationToken);
+        if (membership is { Status: MembershipStatus.Active } &&
+            membership.StartsAtUtc <= utcNow &&
+            (!membership.EndsAtUtc.HasValue || membership.EndsAtUtc > utcNow))
+            throw new ConflictException("An active portal membership already exists.");
         if (membership?.Status == MembershipStatus.Pending)
             throw new ConflictException("A portal membership payment order is already pending.");
+
+        var previousMembershipStatus = membership?.Status;
         if (membership is null)
         {
             membership = new Membership
@@ -41,15 +52,17 @@ public sealed class PaymentService(
                 Status = MembershipStatus.Pending,
                 StartsAtUtc = utcNow
             };
-            membership.History.Add(NewMembershipHistory(membership, null, MembershipStatus.Pending, userId, "Payment initiated."));
+            membership.History.Add(NewMembershipHistory(
+                membership, null, MembershipStatus.Pending, userId, "Payment initiated."));
             await memberships.AddAsync(membership, cancellationToken);
         }
         else
         {
-            var previous = membership.Status;
             membership.Status = MembershipStatus.Pending;
             membership.PlanName = plan.Name;
-            membership.History.Add(NewMembershipHistory(membership, previous, MembershipStatus.Pending, userId, "Payment re-initiated."));
+            membership.History.Add(NewMembershipHistory(
+                membership, previousMembershipStatus, MembershipStatus.Pending,
+                userId, "Payment re-initiated."));
         }
 
         var payment = new Payment
@@ -59,31 +72,47 @@ public sealed class PaymentService(
             Amount = plan.Amount,
             CurrencyCode = plan.CurrencyCode.ToUpperInvariant(),
             Provider = PaymentProvider.Razorpay,
-            Status = PaymentStatus.Pending,
-            ProviderReceipt = $"membership_{Guid.NewGuid():N}"[..31]
+            Status = PaymentStatus.Created
         };
-        payment.History.Add(NewPaymentHistory(payment, null, PaymentStatus.Pending, userId, "Order initiated."));
+        payment.ProviderReceipt = $"m_{payment.Id:N}";
+        payment.History.Add(NewPaymentHistory(
+            payment, null, PaymentStatus.Created, userId, "Local order created."));
         await payments.AddAsync(payment, cancellationToken);
+
+        // The local payment and membership intent exist before any provider request is made.
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         try
         {
-            var amount = checked((long)decimal.Round(payment.Amount * 100m, 0, MidpointRounding.AwayFromZero));
-            var order = await razorpay.CreateOrderAsync(amount, payment.CurrencyCode, payment.ProviderReceipt, cancellationToken);
+            var requestedAmount = ToMinorUnits(payment.Amount);
+            var order = await razorpay.CreateOrderAsync(
+                requestedAmount, payment.CurrencyCode, payment.ProviderReceipt, cancellationToken);
+            if (string.IsNullOrWhiteSpace(order.Id) || order.Id.Length > 200 ||
+                order.Amount != requestedAmount ||
+                !string.Equals(order.Currency, payment.CurrencyCode, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(order.Receipt, payment.ProviderReceipt, StringComparison.Ordinal))
+                throw new ConflictException("Razorpay returned order details that do not match the local payment.");
+
             payment.ProviderOrderId = order.Id;
             payment.TransactionReference = order.Id;
+            payment.ProviderOrderCreatedAtUtc = UtcNow;
+            payment.Status = PaymentStatus.Pending;
+            payment.History.Add(NewPaymentHistory(
+                payment, PaymentStatus.Created, PaymentStatus.Pending, userId, "Provider order created."));
             await unitOfWork.SaveChangesAsync(cancellationToken);
-            return new PaymentOrderResponse(payment.Id, membership.Id, order.Id, razorpay.KeyId,
-                order.Amount, order.Currency, order.Receipt);
+            return new PaymentOrderResponse(
+                payment.Id, membership.Id, order.Id, razorpay.KeyId, order.Amount,
+                order.Currency, order.Receipt, plan.Name, plan.DurationDays);
         }
         catch
         {
             payment.Status = PaymentStatus.Failed;
-            payment.History.Add(NewPaymentHistory(payment, PaymentStatus.Pending, PaymentStatus.Failed, userId, "Provider order creation failed."));
-            var previous = membership.Status;
-            membership.Status = MembershipStatus.Suspended;
-            membership.History.Add(NewMembershipHistory(membership, previous, MembershipStatus.Suspended, userId, "Provider order creation failed."));
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            payment.History.Add(NewPaymentHistory(
+                payment, PaymentStatus.Created, PaymentStatus.Failed,
+                userId, "Provider order creation failed."));
+            RestoreMembershipAfterFailedOrder(
+                membership, previousMembershipStatus, userId, "Provider order creation failed.");
+            await unitOfWork.SaveChangesAsync(CancellationToken.None);
             throw;
         }
     }
@@ -93,51 +122,362 @@ public sealed class PaymentService(
         CancellationToken cancellationToken = default)
     {
         await confirmValidator.ValidateAndThrowAsync(request, cancellationToken);
+        await RequiredCandidateAsync(userId, cancellationToken);
         var payment = await payments.GetOwnedAsync(paymentId, userId, cancellationToken)
             ?? throw new NotFoundException("Payment was not found.");
-        if (payment.Status == PaymentStatus.Paid) return ToResponse(payment);
-        if (payment.Status != PaymentStatus.Pending || payment.ProviderOrderId != request.RazorpayOrderId)
+        EnsureProviderOrderMatches(payment, request.RazorpayOrderId);
+        if (payment.Status == PaymentStatus.Paid)
+        {
+            if (!string.Equals(payment.ProviderPaymentId, request.RazorpayPaymentId, StringComparison.Ordinal))
+                throw new ConflictException("Payment confirmation does not match the stored payment.");
+            return ToResponse(payment);
+        }
+        if (payment.Status != PaymentStatus.Pending)
             throw new ConflictException("Payment is not in a confirmable state.");
-        if (!razorpay.VerifyPaymentSignature(request.RazorpayOrderId, request.RazorpayPaymentId, request.RazorpaySignature))
-            throw new BadRequestException("Payment signature verification failed.", "invalid_payment_signature");
+        if (!razorpay.VerifyPaymentSignature(
+                payment.ProviderOrderId!, request.RazorpayPaymentId, request.RazorpaySignature))
+            throw new BadRequestException(
+                "Payment signature verification failed.", "invalid_payment_signature");
 
-        var utcNow = UtcNow;
-        payment.Status = PaymentStatus.Paid;
-        payment.ProviderPaymentId = request.RazorpayPaymentId;
-        payment.PaidAtUtc = utcNow;
-        payment.History.Add(NewPaymentHistory(payment, PaymentStatus.Pending, PaymentStatus.Paid, userId, "Signature verified."));
-
-        var membership = payment.Membership ?? throw new ConflictException("Payment has no membership.");
-        var previous = membership.Status;
-        var plan = plans.GetDefaultPlan();
-        membership.Status = MembershipStatus.Active;
-        membership.StartsAtUtc = utcNow;
-        membership.EndsAtUtc = utcNow.AddDays(plan.DurationDays);
-        membership.History.Add(NewMembershipHistory(membership, previous, MembershipStatus.Active, userId, "Payment completed."));
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        var providerState = await razorpay.GetOrderPaymentStateAsync(
+            payment.ProviderOrderId!, cancellationToken);
+        payment.LastReconciledAtUtc = UtcNow;
+        if (providerState.State != RazorpayPaymentStateKind.Paid)
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            throw new ConflictException(
+                "Razorpay has not confirmed that the payment is captured.");
+        }
+        ValidateProviderPaymentState(payment, providerState, request.RazorpayPaymentId);
+        await CompletePaymentAsync(
+            payment, request.RazorpayPaymentId, "Checkout signature verified.", null, cancellationToken);
         return ToResponse(payment);
     }
 
-    public async Task<PagedResponse<PaymentResponse>> GetPaymentsAsync(Guid userId, HistoryQuery query, CancellationToken cancellationToken = default)
+    public async Task<PaymentResponse> ReconcileAsync(
+        Guid userId, Guid paymentId, CancellationToken cancellationToken = default)
     {
+        await RequiredCandidateAsync(userId, cancellationToken);
+        var payment = await payments.GetOwnedAsync(paymentId, userId, cancellationToken)
+            ?? throw new NotFoundException("Payment was not found.");
+        if (payment.Status is PaymentStatus.Paid or PaymentStatus.Failed or
+            PaymentStatus.Cancelled or PaymentStatus.Expired)
+            return ToResponse(payment);
+        if (payment.ProviderOrderId is null)
+        {
+            await TransitionToTerminalAsync(
+                payment, PaymentStatus.Failed, null,
+                "Local order has no Razorpay order and cannot be reconciled.", cancellationToken);
+            return ToResponse(payment);
+        }
+
+        var state = await razorpay.GetOrderPaymentStateAsync(
+            payment.ProviderOrderId, cancellationToken);
+        payment.LastReconciledAtUtc = UtcNow;
+        switch (state.State)
+        {
+            case RazorpayPaymentStateKind.Paid:
+                ValidateProviderPaymentState(payment, state);
+                await CompletePaymentAsync(
+                    payment, state.PaymentId!, "Razorpay reconciliation confirmed capture.",
+                    null, cancellationToken);
+                break;
+            case RazorpayPaymentStateKind.Failed:
+                ValidateProviderPaymentState(payment, state);
+                await TransitionToTerminalAsync(
+                    payment, PaymentStatus.Failed, state.PaymentId,
+                    "Razorpay reconciliation reported a failed payment.", cancellationToken);
+                break;
+            case RazorpayPaymentStateKind.Cancelled:
+                await TransitionToTerminalAsync(
+                    payment, PaymentStatus.Cancelled, state.PaymentId,
+                    "Razorpay reconciliation reported cancellation.", cancellationToken);
+                break;
+            case RazorpayPaymentStateKind.Expired:
+                await TransitionToTerminalAsync(
+                    payment, PaymentStatus.Expired, state.PaymentId,
+                    "Razorpay reconciliation reported expiration.", cancellationToken);
+                break;
+            default:
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+                break;
+        }
+        return ToResponse(payment);
+    }
+
+    public async Task<PaymentStatusResponse> GetStatusAsync(
+        Guid userId, CancellationToken cancellationToken = default)
+    {
+        await RequiredCandidateAsync(userId, cancellationToken);
+        var membership = await memberships.GetPortalMembershipForUserAsync(userId, cancellationToken);
+        await ExpireMembershipIfNeededAsync(membership, userId, cancellationToken);
+        var latestPayment = await payments.GetLatestForUserAsync(userId, cancellationToken);
+        return new(
+            membership is null ? null : new MembershipResponse(
+                membership.Id, membership.PlanName, membership.Status,
+                membership.StartsAtUtc, membership.EndsAtUtc, membership.AutoRenew),
+            latestPayment is null ? null : ToResponse(latestPayment));
+    }
+
+    public async Task<RazorpayWebhookResponse> ProcessWebhookAsync(
+        RazorpayWebhookRequest request, CancellationToken cancellationToken = default)
+    {
+        if (request.RawBody.IsEmpty || request.RawBody.Length > MaximumWebhookBytes ||
+            string.IsNullOrWhiteSpace(request.Signature) || request.Signature.Length != 64)
+            throw new BadRequestException("Invalid Razorpay webhook.", "invalid_webhook");
+        if (!razorpay.VerifyWebhookSignature(request.RawBody, request.Signature))
+            throw new BadRequestException(
+                "Razorpay webhook signature verification failed.", "invalid_webhook_signature");
+
+        var providerEventId = GetProviderEventId(request);
+        if (await payments.HasProcessedProviderEventAsync(providerEventId, cancellationToken))
+            return new("Duplicate event acknowledged.");
+
+        var webhook = ParseWebhook(request.RawBody);
+        if (webhook is null)
+            return new("Unsupported event ignored.");
+        var payment = await payments.GetByProviderOrderIdAsync(
+            webhook.OrderId, cancellationToken);
+        if (payment is null)
+            return new("Unknown order ignored.");
+
+        ValidateWebhookPayment(payment, webhook);
+        if (webhook.IsSuccessful)
+        {
+            if (payment.Status == PaymentStatus.Paid)
+            {
+                payment.History.Add(NewPaymentHistory(
+                    payment, PaymentStatus.Paid, PaymentStatus.Paid, payment.UserId,
+                    "Successful webhook acknowledged.", providerEventId));
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                await CompletePaymentAsync(
+                    payment, webhook.PaymentId, "Razorpay webhook confirmed capture.",
+                    providerEventId, cancellationToken);
+            }
+            return new("Payment event processed.");
+        }
+
+        if (payment.Status == PaymentStatus.Paid)
+        {
+            payment.History.Add(NewPaymentHistory(
+                payment, PaymentStatus.Paid, PaymentStatus.Paid, payment.UserId,
+                "Late failure event ignored for paid payment.", providerEventId));
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        else
+        {
+            await TransitionToTerminalAsync(
+                payment, PaymentStatus.Failed, webhook.PaymentId,
+                "Razorpay webhook reported payment failure.", cancellationToken, providerEventId);
+        }
+        return new("Payment event processed.");
+    }
+
+    public async Task<PagedResponse<PaymentResponse>> GetPaymentsAsync(
+        Guid userId, HistoryQuery query, CancellationToken cancellationToken = default)
+    {
+        await RequiredCandidateAsync(userId, cancellationToken);
         RequestGuards.ValidatePagination(query.PageNumber, query.PageSize);
         var result = await payments.GetForUserAsync(userId, query, cancellationToken);
         return new(result.Items, query.PageNumber, query.PageSize, result.TotalCount);
     }
 
-    public async Task<PagedResponse<PaymentHistoryResponse>> GetHistoryAsync(Guid userId, HistoryQuery query, CancellationToken cancellationToken = default)
+    public async Task<PagedResponse<PaymentHistoryResponse>> GetHistoryAsync(
+        Guid userId, HistoryQuery query, CancellationToken cancellationToken = default)
     {
+        await RequiredCandidateAsync(userId, cancellationToken);
         RequestGuards.ValidatePagination(query.PageNumber, query.PageSize);
         var result = await payments.GetHistoryAsync(userId, query, cancellationToken);
         return new(result.Items, query.PageNumber, query.PageSize, result.TotalCount);
     }
 
+    private async Task CompletePaymentAsync(
+        Payment payment, string providerPaymentId, string reason, string? providerEventId,
+        CancellationToken cancellationToken)
+    {
+        if (payment.Status == PaymentStatus.Paid) return;
+        var previousPaymentStatus = payment.Status;
+        var utcNow = UtcNow;
+        payment.Status = PaymentStatus.Paid;
+        payment.ProviderPaymentId = providerPaymentId;
+        payment.PaidAtUtc = utcNow;
+        payment.History.Add(NewPaymentHistory(
+            payment, previousPaymentStatus, PaymentStatus.Paid,
+            payment.UserId, reason, providerEventId));
+
+        var membership = payment.Membership
+            ?? throw new ConflictException("Payment has no membership.");
+        var previousMembershipStatus = membership.Status;
+        var extensionStart = membership.Status == MembershipStatus.Active &&
+            membership.EndsAtUtc.HasValue && membership.EndsAtUtc > utcNow
+                ? membership.EndsAtUtc.Value
+                : utcNow;
+        if (membership.Status != MembershipStatus.Active)
+            membership.StartsAtUtc = utcNow;
+        membership.Status = MembershipStatus.Active;
+        membership.EndsAtUtc = extensionStart.AddDays(plans.GetDefaultPlan().DurationDays);
+        membership.History.Add(NewMembershipHistory(
+            membership, previousMembershipStatus, MembershipStatus.Active,
+            payment.UserId, "Verified Razorpay payment completed."));
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task TransitionToTerminalAsync(
+        Payment payment, PaymentStatus status, string? providerPaymentId, string reason,
+        CancellationToken cancellationToken, string? providerEventId = null)
+    {
+        var previous = payment.Status;
+        payment.Status = status;
+        if (!string.IsNullOrWhiteSpace(providerPaymentId))
+            payment.ProviderPaymentId = providerPaymentId;
+        payment.History.Add(NewPaymentHistory(
+            payment, previous, status, payment.UserId, reason, providerEventId));
+        if (payment.Membership is { Status: MembershipStatus.Pending } membership)
+        {
+            var membershipStatus = status == PaymentStatus.Expired
+                ? MembershipStatus.Expired
+                : MembershipStatus.Cancelled;
+            membership.Status = membershipStatus;
+            membership.History.Add(NewMembershipHistory(
+                membership, MembershipStatus.Pending, membershipStatus,
+                payment.UserId, "Payment did not complete."));
+        }
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task ExpireMembershipIfNeededAsync(
+        Membership? membership, Guid userId, CancellationToken cancellationToken)
+    {
+        if (membership is not { Status: MembershipStatus.Active, EndsAtUtc: not null } ||
+            membership.EndsAtUtc > UtcNow)
+            return;
+        membership.Status = MembershipStatus.Expired;
+        membership.History.Add(NewMembershipHistory(
+            membership, MembershipStatus.Active, MembershipStatus.Expired,
+            userId, "Membership term expired."));
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    private void RestoreMembershipAfterFailedOrder(
+        Membership membership, MembershipStatus? previousStatus, Guid userId, string reason)
+    {
+        var restoredStatus = previousStatus ?? MembershipStatus.Cancelled;
+        membership.Status = restoredStatus;
+        membership.History.Add(NewMembershipHistory(
+            membership, MembershipStatus.Pending, restoredStatus, userId, reason));
+    }
+
+    private async Task RequiredCandidateAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        var user = await users.GetByIdWithRoleAsync(userId, cancellationToken);
+        if (user is null || user.RoleId != SystemRoleIds.Candidate ||
+            !user.EmailConfirmed || user.Status != UserStatus.Active)
+            throw new UnauthorizedException("An active, verified Candidate account is required.");
+    }
+
+    private static void EnsureProviderOrderMatches(Payment payment, string orderId)
+    {
+        if (payment.Provider != PaymentProvider.Razorpay ||
+            !string.Equals(payment.ProviderOrderId, orderId, StringComparison.Ordinal))
+            throw new ConflictException("Payment confirmation does not match the stored order.");
+    }
+
+    private static void ValidateProviderPaymentState(
+        Payment payment, RazorpayPaymentState state, string? expectedPaymentId = null)
+    {
+        if (string.IsNullOrWhiteSpace(state.PaymentId) ||
+            (expectedPaymentId is not null &&
+                !string.Equals(state.PaymentId, expectedPaymentId, StringComparison.Ordinal)) ||
+            state.AmountInMinorUnits != ToMinorUnits(payment.Amount) ||
+            !string.Equals(state.CurrencyCode, payment.CurrencyCode, StringComparison.OrdinalIgnoreCase))
+            throw new ConflictException("Razorpay payment details do not match the local payment.");
+    }
+
+    private static void ValidateWebhookPayment(Payment payment, WebhookPayment webhook)
+    {
+        if (webhook.AmountInMinorUnits != ToMinorUnits(payment.Amount) ||
+            !string.Equals(webhook.CurrencyCode, payment.CurrencyCode, StringComparison.OrdinalIgnoreCase))
+            throw new ConflictException("Razorpay webhook payment details do not match the local payment.");
+    }
+
+    private static WebhookPayment? ParseWebhook(ReadOnlyMemory<byte> rawBody)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(rawBody);
+            var root = document.RootElement;
+            var eventName = root.GetProperty("event").GetString();
+            var isSuccessful = eventName is "payment.captured" or "order.paid";
+            if (!isSuccessful && eventName is not "payment.failed") return null;
+            var entity = root.GetProperty("payload").GetProperty("payment").GetProperty("entity");
+            var orderId = entity.GetProperty("order_id").GetString();
+            var paymentId = entity.GetProperty("id").GetString();
+            var currency = entity.GetProperty("currency").GetString();
+            var status = entity.GetProperty("status").GetString();
+            if (string.IsNullOrWhiteSpace(orderId) || string.IsNullOrWhiteSpace(paymentId) ||
+                string.IsNullOrWhiteSpace(currency) || orderId.Length > 200 ||
+                paymentId.Length > 200 || currency.Length > 3 ||
+                (isSuccessful && status is not "captured") ||
+                (!isSuccessful && status is not "failed"))
+                throw new JsonException("Required payment fields are missing.");
+            return new(
+                orderId, paymentId, entity.GetProperty("amount").GetInt64(),
+                currency, isSuccessful);
+        }
+        catch (JsonException)
+        {
+            throw new BadRequestException("Invalid Razorpay webhook payload.", "invalid_webhook");
+        }
+    }
+
+    private static string GetProviderEventId(RazorpayWebhookRequest request)
+    {
+        if (!string.IsNullOrWhiteSpace(request.EventId) && request.EventId.Length <= 200)
+            return request.EventId;
+        return $"body_{Convert.ToHexString(SHA256.HashData(request.RawBody.Span)).ToLowerInvariant()}";
+    }
+
+    private static long ToMinorUnits(decimal amount) =>
+        checked((long)decimal.Round(amount * 100m, 0, MidpointRounding.AwayFromZero));
+
     private static PaymentResponse ToResponse(Payment x) => new(
         x.Id, x.Amount, x.CurrencyCode, x.Status, x.Provider, x.ProviderOrderId,
-        x.ProviderPaymentId, x.PaidAtUtc, x.MembershipId, x.CreatedAtUtc);
-    private PaymentHistory NewPaymentHistory(Payment payment, PaymentStatus? previous, PaymentStatus current, Guid userId, string reason) =>
-        new() { Payment = payment, UserId = userId, PreviousStatus = previous, CurrentStatus = current, OccurredAtUtc = UtcNow, Reason = reason };
-    private MembershipHistory NewMembershipHistory(Membership membership, MembershipStatus? previous, MembershipStatus current, Guid userId, string reason) =>
-        new() { Membership = membership, UserId = userId, PreviousStatus = previous, CurrentStatus = current, OccurredAtUtc = UtcNow, Reason = reason };
+        x.ProviderPaymentId, x.PaidAtUtc, x.MembershipId, x.CreatedAtUtc,
+        x.ProviderOrderCreatedAtUtc, x.LastReconciledAtUtc);
+
+    private PaymentHistory NewPaymentHistory(
+        Payment payment, PaymentStatus? previous, PaymentStatus current,
+        Guid userId, string reason, string? providerEventId = null) =>
+        new()
+        {
+            Payment = payment,
+            UserId = userId,
+            PreviousStatus = previous,
+            CurrentStatus = current,
+            OccurredAtUtc = UtcNow,
+            Reason = reason,
+            ProviderEventId = providerEventId
+        };
+
+    private MembershipHistory NewMembershipHistory(
+        Membership membership, MembershipStatus? previous,
+        MembershipStatus current, Guid userId, string reason) =>
+        new()
+        {
+            Membership = membership,
+            UserId = userId,
+            PreviousStatus = previous,
+            CurrentStatus = current,
+            OccurredAtUtc = UtcNow,
+            Reason = reason
+        };
+
+    private sealed record WebhookPayment(
+        string OrderId, string PaymentId, long AmountInMinorUnits,
+        string CurrencyCode, bool IsSuccessful);
+
     private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
 }

@@ -98,6 +98,20 @@ set `Email:Enabled` only when all required email settings are available. Deliver
 roll back token state, allowing resend or another password-reset request to recover. A durable
 transactional outbox should be considered before scaling production delivery.
 
+## Razorpay Test Mode payments
+
+The only purchasable plan is a portal-wide ₹99 INR Candidate membership lasting 30 days.
+Payment orders are first persisted locally in `Created` state and become `Pending` only after
+Razorpay returns matching server-requested order details. Checkout confirmations, raw-body
+webhooks, and reconciliation all pass through `IRazorpayGateway`; membership is activated or
+extended only after a verified signature or a provider-confirmed captured payment.
+
+Provider order IDs, payment IDs, and webhook event IDs remain globally unique even if a local
+record is soft-deleted. Candidate reads and confirmations are owner-scoped. The webhook is
+anonymous only at the HTTP authentication layer and rejects every request without a valid
+Razorpay webhook HMAC. Configuration and manual testing are documented in
+`RAZORPAY_TEST_MODE.md`. Refunds remain a future audited administrative workflow.
+
 ## Scaling guidance
 
 - API instances are stateless and can scale horizontally.

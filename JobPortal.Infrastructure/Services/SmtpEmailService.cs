@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Mail;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Domain.Entities;
+using JobPortal.Domain.Enums;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -27,6 +28,26 @@ public sealed class SmtpEmailService(IConfiguration configuration, ILogger<SmtpE
         SendAsync(user.Email, "Reset your Job Portal password",
             $"Reset your password within 30 minutes using this secure link: {BuildUrl("Email:PasswordResetUrl", user.Email, resetToken)}",
             "password-reset", cancellationToken);
+
+    public Task<EmailDeliveryResult> SendApplicationStatusAsync(
+        User user, string jobTitle, JobApplicationStatus status,
+        CancellationToken cancellationToken = default)
+    {
+        var safeJobTitle = jobTitle.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        var statusText = status switch
+        {
+            JobApplicationStatus.Shortlisted => "shortlisted",
+            JobApplicationStatus.Rejected => "not selected",
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(status), status, "Only terminal review statuses are emailed.")
+        };
+        return SendAsync(
+            user.Email,
+            $"Application update - {safeJobTitle}",
+            $"Hello {user.FirstName}, your application for {safeJobTitle} has been {statusText}.",
+            $"application-{status.ToString().ToLowerInvariant()}",
+            cancellationToken);
+    }
 
     private async Task<EmailDeliveryResult> SendAsync(
         string recipient, string subject, string body, string messageType, CancellationToken cancellationToken)

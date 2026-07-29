@@ -1,5 +1,6 @@
 using JobPortal.Application.Features.Authentication;
 using JobPortal.Domain.Entities;
+using JobPortal.Domain.Enums;
 
 namespace JobPortal.Application.Abstractions.Authentication;
 
@@ -35,6 +36,9 @@ public interface IEmailService
 {
     Task<EmailDeliveryResult> SendEmailVerificationAsync(User user, string verificationToken, CancellationToken cancellationToken = default);
     Task<EmailDeliveryResult> SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default);
+    Task<EmailDeliveryResult> SendApplicationStatusAsync(
+        User user, string jobTitle, JobApplicationStatus status,
+        CancellationToken cancellationToken = default);
 }
 
 public enum EmailDeliveryResult { Sent, Disabled, Failed }

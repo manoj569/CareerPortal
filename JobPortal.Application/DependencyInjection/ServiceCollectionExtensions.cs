@@ -1,4 +1,5 @@
 using FluentValidation;
+using JobPortal.Application.Abstractions.AdminApplications;
 using JobPortal.Application.Abstractions.AdminDashboard;
 using JobPortal.Application.Abstractions.AdminManagement;
 using JobPortal.Application.Abstractions.Authentication;
@@ -7,6 +8,7 @@ using JobPortal.Application.Abstractions.Dashboard;
 using JobPortal.Application.Abstractions.Jobs;
 using JobPortal.Application.Abstractions.Memberships;
 using JobPortal.Application.Abstractions.Payments;
+using JobPortal.Application.Features.AdminApplications;
 using JobPortal.Application.Features.AdminDashboard;
 using JobPortal.Application.Features.AdminManagement;
 using JobPortal.Application.Features.Authentication;
@@ -34,6 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IPaymentService, PaymentService>();
         services.AddScoped<IDashboardService, DashboardService>();
         services.AddScoped<IAdminDashboardService, AdminDashboardService>();
+        services.AddScoped<IAdminApplicationService, AdminApplicationService>();
         services.AddScoped<ICompanyManagementService, CompanyManagementService>();
         services.AddScoped<ICategoryManagementService, CategoryManagementService>();
         return services;

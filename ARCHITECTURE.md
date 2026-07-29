@@ -90,6 +90,31 @@ Applications require an active portal-wide membership and an available published
 unexpired job. A unique database index prevents any duplicate application for a candidate/job
 pair. Candidates can withdraw only applications still in `Submitted` status.
 
+## Administrator application review
+
+Application-review endpoints require the exact `Administrator` role:
+
+- `GET /api/admin/applications` accepts job, company, category, status, submitted-date, and
+  keyword filters together with capped pagination.
+- `GET /api/admin/applications/{applicationId}` returns the review-safe candidate profile, job
+  summary, cover letter, current status, and status history.
+- `GET /api/admin/applications/{applicationId}/resume` streams the application-time resume
+  snapshot from private storage. Storage keys and public resume URLs are never returned.
+- `PUT /api/admin/applications/{applicationId}/status` supports `Reviewed`, `Shortlisted`, and
+  `Rejected` under the application transition rules.
+
+Every transition records its previous and new status, the authenticated actor, UTC timestamp,
+and an optional administrator-only note. Candidate application DTOs do not include status
+history or internal notes. Shortlist and rejection notification attempts run only after the
+database commit and receive no internal-note value, so an SMTP failure cannot revert the review.
+For production-scale delivery, replace direct SMTP notification with a durable transactional
+outbox and worker.
+
+To exercise the flow in Swagger, sign in as an Administrator, authorize with the access token,
+list applications to obtain an identifier, open its detail, optionally download its resume, then
+send `{"status":"Reviewed","internalNote":"Reviewed in Swagger"}` to the status endpoint.
+Follow with `Shortlisted` or `Rejected`; final and withdrawn applications must return a conflict.
+
 ## Transactional email
 
 Email verification and password reset use direct SMTP delivery after token state has been

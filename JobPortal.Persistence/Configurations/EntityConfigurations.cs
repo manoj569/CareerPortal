@@ -279,12 +279,30 @@ public sealed class JobApplicationConfiguration : IEntityTypeConfiguration<JobAp
         builder.Property(x => x.CoverLetter).HasMaxLength(5000);
         builder.Property(x => x.ResumeStorageKey).HasMaxLength(255);
         builder.Property(x => x.ResumeFileName).HasMaxLength(255);
+        builder.Property(x => x.ResumeContentType).HasMaxLength(100);
         builder.HasIndex(x => new { x.UserId, x.JobId }).IsUnique();
         builder.HasIndex(x => new { x.UserId, x.Status, x.SubmittedAtUtc });
         builder.HasOne(x => x.User).WithMany(x => x.JobApplications)
             .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(x => x.Job).WithMany(x => x.Applications)
             .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class JobApplicationStatusHistoryConfiguration :
+    IEntityTypeConfiguration<JobApplicationStatusHistory>
+{
+    public void Configure(EntityTypeBuilder<JobApplicationStatusHistory> builder)
+    {
+        builder.ToTable("JobApplicationStatusHistory");
+        builder.ConfigureBaseEntity();
+        builder.Property(x => x.InternalNote).HasMaxLength(2000);
+        builder.HasIndex(x => new { x.ApplicationId, x.ChangedAtUtc });
+        builder.HasIndex(x => new { x.ActorUserId, x.ChangedAtUtc });
+        builder.HasOne(x => x.Application).WithMany(x => x.StatusHistory)
+            .HasForeignKey(x => x.ApplicationId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(x => x.ActorUser).WithMany()
+            .HasForeignKey(x => x.ActorUserId).OnDelete(DeleteBehavior.Restrict);
     }
 }
 

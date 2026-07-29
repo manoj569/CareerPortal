@@ -219,6 +219,10 @@ public sealed class EmailVerificationTests
             LastResetToken = resetToken;
             return Task.FromResult(Result);
         }
+        public Task<EmailDeliveryResult> SendApplicationStatusAsync(
+            User user, string jobTitle, JobApplicationStatus status,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result);
     }
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider

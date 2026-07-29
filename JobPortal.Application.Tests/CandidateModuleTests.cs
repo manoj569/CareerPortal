@@ -59,6 +59,10 @@ public sealed class CandidateModuleTests
 
         Assert.Equal("resume.pdf", submitted.ResumeFileName);
         Assert.Equal("current.pdf", fixture.Repository.AddedApplications.Single().ResumeStorageKey);
+        var history = Assert.Single(fixture.Repository.AddedApplications.Single().StatusHistory);
+        Assert.Null(history.PreviousStatus);
+        Assert.Equal(JobApplicationStatus.Submitted, history.NewStatus);
+        Assert.Equal(fixture.Candidate.Id, history.ActorUserId);
         await Assert.ThrowsAsync<NotFoundException>(() =>
             fixture.Service.GetApplicationAsync(fixture.Candidate.Id, Guid.NewGuid()));
     }
@@ -74,6 +78,10 @@ public sealed class CandidateModuleTests
 
         Assert.Equal(JobApplicationStatus.Withdrawn, response.Status);
         Assert.NotNull(submitted.WithdrawnAtUtc);
+        var history = Assert.Single(submitted.StatusHistory);
+        Assert.Equal(JobApplicationStatus.Submitted, history.PreviousStatus);
+        Assert.Equal(JobApplicationStatus.Withdrawn, history.NewStatus);
+        Assert.Equal(fixture.Candidate.Id, history.ActorUserId);
 
         fixture.Repository.OwnedApplication = fixture.CreateApplication(JobApplicationStatus.Reviewed);
         await Assert.ThrowsAsync<ConflictException>(() =>

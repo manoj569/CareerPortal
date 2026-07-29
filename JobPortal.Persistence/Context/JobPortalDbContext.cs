@@ -24,6 +24,8 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<JobApplication> JobApplications => Set<JobApplication>();
+    public DbSet<JobApplicationStatusHistory> JobApplicationStatusHistory =>
+        Set<JobApplicationStatusHistory>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {

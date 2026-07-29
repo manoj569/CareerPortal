@@ -26,6 +26,9 @@ public sealed class AuthExamplesOperationFilter : IOperationFilter
                 ("razorpayOrderId", "order_test_example"),
                 ("razorpayPaymentId", "pay_test_example"),
                 ("razorpaySignature", new string('a', 64))),
+            "UpdateStatus" => Object(
+                ("status", "Shortlisted"),
+                ("internalNote", "Strong experience; schedule an interview.")),
             _ => null
         };
     }

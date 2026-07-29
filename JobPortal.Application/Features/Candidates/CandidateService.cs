@@ -143,8 +143,17 @@ public sealed class CandidateService(
             CoverLetter = TextNormalizer.TrimOrNull(request.CoverLetter),
             ResumeStorageKey = user.ResumeStorageKey,
             ResumeFileName = user.ResumeFileName,
+            ResumeContentType = user.ResumeContentType,
             SubmittedAtUtc = UtcNow
         };
+        application.StatusHistory.Add(new JobApplicationStatusHistory
+        {
+            Application = application,
+            ActorUserId = userId,
+            PreviousStatus = null,
+            NewStatus = JobApplicationStatus.Submitted,
+            ChangedAtUtc = UtcNow
+        });
         await candidates.AddApplicationAsync(application, cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapApplication(application, job);
@@ -177,8 +186,17 @@ public sealed class CandidateService(
             ?? throw new NotFoundException("Application was not found.");
         if (application.Status != JobApplicationStatus.Submitted)
             throw new ConflictException("Only a Submitted application can be withdrawn.");
+        var previous = application.Status;
         application.Status = JobApplicationStatus.Withdrawn;
         application.WithdrawnAtUtc = UtcNow;
+        application.StatusHistory.Add(new JobApplicationStatusHistory
+        {
+            ApplicationId = application.Id,
+            ActorUserId = userId,
+            PreviousStatus = previous,
+            NewStatus = JobApplicationStatus.Withdrawn,
+            ChangedAtUtc = UtcNow
+        });
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapApplication(application,
             new CandidateJob(application.JobId, application.Job.Title, application.Job.Slug, application.Job.Company.Name));

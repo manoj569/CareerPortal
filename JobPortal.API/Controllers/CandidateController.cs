@@ -1,0 +1,101 @@
+using JobPortal.API.Extensions;
+using JobPortal.Application.Abstractions.Candidates;
+using JobPortal.Application.Features.Candidates;
+using JobPortal.Shared.Models;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace JobPortal.API.Controllers;
+
+[ApiController]
+[Authorize(Roles = "Candidate")]
+[Route("api/candidate")]
+[Produces("application/json")]
+public sealed class CandidateController(ICandidateService candidates) : ControllerBase
+{
+    [HttpGet("profile")]
+    public async Task<ActionResult<ApiResponse<CandidateProfileResponse>>> Profile(CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<CandidateProfileResponse>(
+            await candidates.GetProfileAsync(User.GetRequiredUserId(), cancellationToken)));
+
+    [HttpPut("profile")]
+    public async Task<ActionResult<ApiResponse<CandidateProfileResponse>>> UpdateProfile(
+        UpdateCandidateProfileRequest request, CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<CandidateProfileResponse>(
+            await candidates.UpdateProfileAsync(User.GetRequiredUserId(), request, cancellationToken)));
+
+    [HttpPut("resume")]
+    [Consumes("multipart/form-data")]
+    [RequestSizeLimit(6 * 1024 * 1024)]
+    public async Task<ActionResult<ApiResponse<ResumeResponse>>> UploadResume(
+        IFormFile file, CancellationToken cancellationToken)
+    {
+        await using var stream = file.OpenReadStream();
+        var result = await candidates.UploadResumeAsync(User.GetRequiredUserId(),
+            new ResumeUpload(stream, file.Length, file.FileName, file.ContentType), cancellationToken);
+        return Ok(new ApiResponse<ResumeResponse>(result, "Resume uploaded successfully."));
+    }
+
+    [HttpGet("resume")]
+    public async Task<IActionResult> DownloadResume(CancellationToken cancellationToken)
+    {
+        var result = await candidates.DownloadResumeAsync(User.GetRequiredUserId(), cancellationToken);
+        return File(result.Content, result.ContentType, result.FileName);
+    }
+
+    [HttpDelete("resume")]
+    public async Task<IActionResult> DeleteResume(CancellationToken cancellationToken)
+    {
+        await candidates.DeleteResumeAsync(User.GetRequiredUserId(), cancellationToken);
+        return NoContent();
+    }
+
+    [HttpGet("saved-jobs")]
+    public async Task<ActionResult<ApiResponse<PagedResponse<CandidateSavedJobResponse>>>> SavedJobs(
+        [FromQuery] CandidatePageQuery query, CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<PagedResponse<CandidateSavedJobResponse>>(
+            await candidates.GetSavedJobsAsync(User.GetRequiredUserId(), query, cancellationToken)));
+
+    [HttpPut("saved-jobs/{jobId:guid}")]
+    public async Task<IActionResult> SaveJob(Guid jobId, CancellationToken cancellationToken)
+    {
+        await candidates.SaveJobAsync(User.GetRequiredUserId(), jobId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpDelete("saved-jobs/{jobId:guid}")]
+    public async Task<IActionResult> RemoveSavedJob(Guid jobId, CancellationToken cancellationToken)
+    {
+        await candidates.RemoveSavedJobAsync(User.GetRequiredUserId(), jobId, cancellationToken);
+        return NoContent();
+    }
+
+    [HttpPost("jobs/{jobId:guid}/applications")]
+    public async Task<ActionResult<ApiResponse<JobApplicationResponse>>> Apply(
+        Guid jobId, CreateJobApplicationRequest request, CancellationToken cancellationToken)
+    {
+        var result = await candidates.ApplyAsync(
+            User.GetRequiredUserId(), jobId, request, cancellationToken);
+        return StatusCode(StatusCodes.Status201Created,
+            new ApiResponse<JobApplicationResponse>(result, "Application submitted successfully."));
+    }
+
+    [HttpGet("applications")]
+    public async Task<ActionResult<ApiResponse<PagedResponse<JobApplicationResponse>>>> Applications(
+        [FromQuery] JobApplicationQuery query, CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<PagedResponse<JobApplicationResponse>>(
+            await candidates.GetApplicationsAsync(User.GetRequiredUserId(), query, cancellationToken)));
+
+    [HttpGet("applications/{applicationId:guid}")]
+    public async Task<ActionResult<ApiResponse<JobApplicationResponse>>> Application(
+        Guid applicationId, CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<JobApplicationResponse>(
+            await candidates.GetApplicationAsync(User.GetRequiredUserId(), applicationId, cancellationToken)));
+
+    [HttpPost("applications/{applicationId:guid}/withdraw")]
+    public async Task<ActionResult<ApiResponse<JobApplicationResponse>>> Withdraw(
+        Guid applicationId, CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<JobApplicationResponse>(
+            await candidates.WithdrawAsync(User.GetRequiredUserId(), applicationId, cancellationToken),
+            "Application withdrawn successfully."));
+}

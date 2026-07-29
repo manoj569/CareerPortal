@@ -32,6 +32,16 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.ProfileImageUrl).HasMaxLength(2048);
         builder.Property(x => x.Headline).HasMaxLength(250);
         builder.Property(x => x.Bio).HasMaxLength(4000);
+        builder.Property(x => x.Location).HasMaxLength(250);
+        builder.Property(x => x.LinkedInUrl).HasMaxLength(2048);
+        builder.Property(x => x.PortfolioUrl).HasMaxLength(2048);
+        builder.Property(x => x.SkillsJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.EducationJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.ExperienceJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.PreferredJobTypesJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.ResumeStorageKey).HasMaxLength(255);
+        builder.Property(x => x.ResumeFileName).HasMaxLength(255);
+        builder.Property(x => x.ResumeContentType).HasMaxLength(100);
         builder.Property(x => x.PasswordResetTokenHash).HasMaxLength(64);
         builder.Property(x => x.EmailVerificationTokenHash).HasMaxLength(64);
         builder.HasIndex(x => x.NormalizedEmail).IsUnique().HasFilter("[IsDeleted] = 0");
@@ -256,6 +266,24 @@ public sealed class UserJobHistoryConfiguration : IEntityTypeConfiguration<UserJ
         builder.HasIndex(x => new { x.JobId, x.Action, x.OccurredAtUtc });
         builder.HasOne(x => x.User).WithMany(x => x.JobHistory).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne(x => x.Job).WithMany(x => x.UserHistory).HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class JobApplicationConfiguration : IEntityTypeConfiguration<JobApplication>
+{
+    public void Configure(EntityTypeBuilder<JobApplication> builder)
+    {
+        builder.ToTable("JobApplications");
+        builder.ConfigureBaseEntity();
+        builder.Property(x => x.CoverLetter).HasMaxLength(5000);
+        builder.Property(x => x.ResumeStorageKey).HasMaxLength(255);
+        builder.Property(x => x.ResumeFileName).HasMaxLength(255);
+        builder.HasIndex(x => new { x.UserId, x.JobId }).IsUnique();
+        builder.HasIndex(x => new { x.UserId, x.Status, x.SubmittedAtUtc });
+        builder.HasOne(x => x.User).WithMany(x => x.JobApplications)
+            .HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne(x => x.Job).WithMany(x => x.Applications)
+            .HasForeignKey(x => x.JobId).OnDelete(DeleteBehavior.Restrict);
     }
 }
 

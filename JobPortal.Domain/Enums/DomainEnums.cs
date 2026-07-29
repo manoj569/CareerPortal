@@ -12,3 +12,4 @@ public enum JobHistoryAction { Viewed = 1, Saved, Applied, Withdrawn, Rejected, 
 public enum NotificationType { General = 1, Job, Application, Payment, Membership, Security }
 public enum AuditAction { Create = 1, Update, Delete, Restore, Login, Logout }
 public enum SettingScope { Global = 1, User, Company }
+public enum JobApplicationStatus { Submitted = 1, Reviewed, Shortlisted, Rejected, Withdrawn }

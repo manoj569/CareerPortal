@@ -23,6 +23,7 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     public DbSet<Notification> Notifications => Set<Notification>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Setting> Settings => Set<Setting>();
+    public DbSet<JobApplication> JobApplications => Set<JobApplication>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {

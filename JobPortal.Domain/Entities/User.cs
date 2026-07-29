@@ -14,6 +14,18 @@ public sealed class User : BaseEntity
     public string? ProfileImageUrl { get; set; }
     public string? Headline { get; set; }
     public string? Bio { get; set; }
+    public string? Location { get; set; }
+    public string? LinkedInUrl { get; set; }
+    public string? PortfolioUrl { get; set; }
+    public string SkillsJson { get; set; } = "[]";
+    public string EducationJson { get; set; } = "[]";
+    public string ExperienceJson { get; set; } = "[]";
+    public string PreferredJobTypesJson { get; set; } = "[]";
+    public string? ResumeStorageKey { get; set; }
+    public string? ResumeFileName { get; set; }
+    public string? ResumeContentType { get; set; }
+    public long? ResumeSizeBytes { get; set; }
+    public DateTime? ResumeUploadedAtUtc { get; set; }
     public UserStatus Status { get; set; } = UserStatus.Pending;
     public bool EmailConfirmed { get; set; }
     public DateTime? LastLoginAtUtc { get; set; }
@@ -33,4 +45,5 @@ public sealed class User : BaseEntity
     public ICollection<Notification> Notifications { get; set; } = new List<Notification>();
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
     public ICollection<Setting> Settings { get; set; } = new List<Setting>();
+    public ICollection<JobApplication> JobApplications { get; set; } = new List<JobApplication>();
 }

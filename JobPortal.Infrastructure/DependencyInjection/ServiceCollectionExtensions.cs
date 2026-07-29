@@ -1,8 +1,10 @@
 using JobPortal.Application.Abstractions.Authentication;
+using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Payments;
 using JobPortal.Infrastructure.Authentication;
 using JobPortal.Infrastructure.Payments;
 using JobPortal.Infrastructure.Services;
+using JobPortal.Infrastructure.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -18,6 +20,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IEmailService, SmtpEmailService>();
         services.AddSingleton<IRazorpayGateway, RazorpayGateway>();
         services.AddSingleton<IMembershipPlanProvider, ConfigurationMembershipPlanProvider>();
+        services.AddSingleton<IResumeStorage, LocalResumeStorage>();
         return services;
     }
 

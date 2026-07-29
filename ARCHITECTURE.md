@@ -27,6 +27,7 @@ References must continue to point inward. Domain code must not reference EF Core
 
 - Public endpoints use `/api/jobs`.
 - Authenticated user endpoints use `/api/dashboard`, `/api/memberships`, and `/api/payments`.
+- Candidate-only profile, resume, saved-job, and application endpoints use `/api/candidate`.
 - Administrator endpoints use `/api/admin`.
 - Collection endpoints are paginated and capped at 100 items.
 - All database and external I/O is asynchronous and accepts a `CancellationToken`.
@@ -61,6 +62,33 @@ existing non-Administrator account.
 - Authentication endpoints have stricter per-client rate limits.
 - Output caching is restricted to anonymous public-job reads and varies by query and origin.
 - Forwarded headers are accepted only from configured trusted proxies.
+
+## Candidate profiles and applications
+
+Candidate endpoints require the `Candidate` role and re-check that the current account is both
+email-verified and Active. Every profile, resume, saved-job, and application query is scoped by
+the authenticated user's identifier; client-supplied candidate identifiers are never accepted.
+
+- `GET|PUT /api/candidate/profile`
+- `PUT|GET|DELETE /api/candidate/resume`
+- `GET /api/candidate/saved-jobs`
+- `PUT|DELETE /api/candidate/saved-jobs/{jobId}`
+- `POST /api/candidate/jobs/{jobId}/applications`
+- `GET /api/candidate/applications`
+- `GET /api/candidate/applications/{applicationId}`
+- `POST /api/candidate/applications/{applicationId}/withdraw`
+
+Resume storage is abstracted behind `IResumeStorage`. The default local implementation generates
+opaque server-side keys and writes beneath `ResumeStorage:RootPath`, which must not be inside a
+`wwwroot` path. Uploads are limited to 5 MB and require matching PDF, legacy DOC, or DOCX
+extension, media type, and file signature. Production deployments should configure a persistent
+private volume or replace the implementation with private object storage, and should add malware
+scanning and retention policies. Resume files referenced by submitted applications are retained
+when a candidate replaces or removes the current resume.
+
+Applications require an active portal-wide membership and an available published, visible,
+unexpired job. A unique database index prevents any duplicate application for a candidate/job
+pair. Candidates can withdraw only applications still in `Submitted` status.
 
 ## Transactional email
 

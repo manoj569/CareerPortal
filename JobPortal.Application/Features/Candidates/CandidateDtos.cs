@@ -1,0 +1,26 @@
+using JobPortal.Domain.Enums;
+using JobPortal.Shared.Models;
+
+namespace JobPortal.Application.Features.Candidates;
+
+public sealed record CandidateProfileResponse(
+    Guid Id, string Email, string FirstName, string LastName, string? Headline, string? Bio,
+    string? Location, IReadOnlyCollection<string> Skills, IReadOnlyCollection<string> Education,
+    IReadOnlyCollection<string> Experience, string? LinkedInUrl, string? PortfolioUrl,
+    IReadOnlyCollection<EmploymentType> PreferredJobTypes, ResumeResponse? Resume);
+public sealed record UpdateCandidateProfileRequest(
+    string? Headline, string? Bio, string? Location, IReadOnlyCollection<string> Skills,
+    IReadOnlyCollection<string> Education, IReadOnlyCollection<string> Experience,
+    string? LinkedInUrl, string? PortfolioUrl, IReadOnlyCollection<EmploymentType> PreferredJobTypes);
+public sealed record ResumeUpload(Stream Content, long Length, string FileName, string ContentType);
+public sealed record ResumeResponse(string FileName, string ContentType, long SizeBytes, DateTime UploadedAtUtc);
+public sealed record ResumeDownload(Stream Content, string FileName, string ContentType);
+public sealed record CandidatePageQuery(int PageNumber = 1, int PageSize = 20);
+public sealed record CandidateSavedJobResponse(Guid SavedJobId, DateTime SavedAtUtc, Guid JobId, string Title, string Slug, string CompanyName);
+public sealed record CreateJobApplicationRequest(string? CoverLetter);
+public sealed record JobApplicationQuery(
+    int PageNumber = 1, int PageSize = 20, JobApplicationStatus? Status = null);
+public sealed record JobApplicationResponse(
+    Guid Id, Guid JobId, string JobTitle, string JobSlug, string CompanyName,
+    JobApplicationStatus Status, string? CoverLetter, string? ResumeFileName,
+    DateTime SubmittedAtUtc, DateTime? WithdrawnAtUtc);

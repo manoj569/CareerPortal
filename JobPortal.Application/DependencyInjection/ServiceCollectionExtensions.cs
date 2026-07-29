@@ -31,6 +31,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AdminBootstrapService>();
         services.AddScoped<ICandidateService, CandidateService>();
         services.AddScoped<IJobService, JobService>();
+        services.AddScoped<IJobExpiryService, JobExpiryService>();
         services.AddScoped<IPublicJobService, PublicJobService>();
         services.AddScoped<IMembershipService, MembershipService>();
         services.AddScoped<IPaymentService, PaymentService>();

@@ -49,6 +49,12 @@ public sealed class JobService(
         await updateValidator.ValidateAndThrowAsync(request, cancellationToken);
         await ValidateReferencesAsync(request.CompanyId, request.CategoryId, cancellationToken);
         var job = await RequiredJobAsync(id, false, cancellationToken);
+        if (job.Status == JobStatus.Archived)
+            throw new ConflictException("An archived job cannot be updated.");
+        if (job.Status == JobStatus.Published &&
+            (!request.ExpiresAtUtc.HasValue || request.ExpiresAtUtc <= UtcNow))
+            throw new BadRequestException(
+                "A published job must have an expiration date in the future.");
         job.Apply(request);
         job.Slug = $"{Slugify(request.Title)}-{job.Id.ToString("N")[..8]}";
         jobs.Update(job);
@@ -71,18 +77,47 @@ public sealed class JobService(
         await jobs.DeletePermanentlyAsync(id, cancellationToken);
     }
 
-    public Task<JobResponse> PublishAsync(Guid id, CancellationToken cancellationToken = default) =>
+    public async Task<JobResponse> PublishAsync(
+        Guid id, CancellationToken cancellationToken = default)
+    {
+        var job = await RequiredJobAsync(id, false, cancellationToken);
+        if (job.Status == JobStatus.Published)
+            throw new ConflictException("The job is already published.");
+        if (job.Status == JobStatus.Archived)
+            throw new ConflictException("An archived job cannot be published.");
+
+        await updateValidator.ValidateAndThrowAsync(ToUpdateRequest(job), cancellationToken);
+        await ValidateReferencesAsync(job.CompanyId, job.CategoryId, cancellationToken);
+        if (!job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc <= UtcNow)
+            throw new BadRequestException(
+                "A job must have an expiration date in the future before it can be published.");
+
+        job.Status = JobStatus.Published;
+        job.PublishedAtUtc = UtcNow;
+        job.IsFeatured = false;
+        job.IsHidden = false;
+        return await SaveStateChangeAsync(job, cancellationToken);
+    }
+
+    public Task<JobResponse> UnpublishAsync(
+        Guid id, CancellationToken cancellationToken = default) =>
         ChangeAsync(id, job =>
         {
-            if (job.Status == JobStatus.Published)
-                throw new ConflictException("The job is already published.");
-            if (job.Status == JobStatus.Archived)
-                throw new ConflictException("An archived job cannot be published.");
-            if (job.ExpiresAtUtc <= UtcNow)
-                throw new BadRequestException("A job with an expired expiration date cannot be published.");
-            job.Status = JobStatus.Published;
-            job.PublishedAtUtc = UtcNow;
-            job.IsHidden = false;
+            if (job.Status != JobStatus.Published)
+                throw new ConflictException("Only a published job can be unpublished.");
+            job.Status = JobStatus.Draft;
+            job.PublishedAtUtc = null;
+            job.IsFeatured = false;
+        }, cancellationToken);
+
+    public Task<JobResponse> CloseAsync(
+        Guid id, CancellationToken cancellationToken = default) =>
+        ChangeAsync(id, job =>
+        {
+            if (job.Status != JobStatus.Published)
+                throw new ConflictException("Only a published job can be closed.");
+            job.Status = JobStatus.Closed;
+            job.IsFeatured = false;
         }, cancellationToken);
 
     public Task<JobResponse> ArchiveAsync(Guid id, CancellationToken cancellationToken = default) =>
@@ -97,13 +132,20 @@ public sealed class JobService(
     public Task<JobResponse> SetFeaturedAsync(Guid id, bool isFeatured, CancellationToken cancellationToken = default) =>
         ChangeAsync(id, job =>
         {
-            if (isFeatured && job.Status != JobStatus.Published)
-                throw new ConflictException("Only published jobs can be featured.");
+            if (isFeatured && (job.Status != JobStatus.Published ||
+                job.IsHidden || !job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc <= UtcNow))
+                throw new ConflictException(
+                    "Only visible, unexpired published jobs can be featured.");
             job.IsFeatured = isFeatured;
         }, cancellationToken);
 
     public Task<JobResponse> SetHiddenAsync(Guid id, bool isHidden, CancellationToken cancellationToken = default) =>
-        ChangeAsync(id, job => job.IsHidden = isHidden, cancellationToken);
+        ChangeAsync(id, job =>
+        {
+            job.IsHidden = isHidden;
+            if (isHidden)
+                job.IsFeatured = false;
+        }, cancellationToken);
 
     public async Task<PagedResponse<JobResponse>> SearchAsync(JobSearchQuery query, CancellationToken cancellationToken = default)
     {
@@ -117,9 +159,15 @@ public sealed class JobService(
     {
         var job = await RequiredJobAsync(id, false, cancellationToken);
         change(job);
+        return await SaveStateChangeAsync(job, cancellationToken);
+    }
+
+    private async Task<JobResponse> SaveStateChangeAsync(
+        Job job, CancellationToken cancellationToken)
+    {
         jobs.Update(job);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        return (await RequiredJobAsync(id, false, cancellationToken)).ToResponse();
+        return (await RequiredJobAsync(job.Id, false, cancellationToken)).ToResponse();
     }
 
     private async Task<Job> RequiredJobAsync(Guid id, bool includeDeleted, CancellationToken cancellationToken) =>
@@ -133,6 +181,12 @@ public sealed class JobService(
         if (!await jobs.CategoryExistsAsync(categoryId, cancellationToken))
             throw new BadRequestException($"Category '{categoryId}' does not exist.", "invalid_category");
     }
+
+    private static UpdateJobRequest ToUpdateRequest(Job job) => new(
+        job.Title, job.Description, job.CompanyId, job.CategoryId, job.ApplicationUrl,
+        job.Responsibilities, job.Requirements, job.Benefits, job.Location,
+        job.MinimumSalary, job.MaximumSalary, job.CurrencyCode, job.EmploymentType,
+        job.WorkplaceType, job.ExperienceLevel, job.ExpiresAtUtc);
 
     private static string Slugify(string value)
     {
@@ -151,4 +205,14 @@ public sealed class JobService(
     }
 
     private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
+}
+
+public sealed class JobExpiryService(
+    IJobRepository jobs,
+    TimeProvider timeProvider) : IJobExpiryService
+{
+    public Task<int> ExpireOverdueAsync(
+        CancellationToken cancellationToken = default) =>
+        jobs.ExpireOverduePublishedAsync(
+            timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
 }

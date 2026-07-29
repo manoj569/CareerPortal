@@ -94,8 +94,8 @@ public sealed class PublicJobRepository(
                 company.Id, company.Name, company.Slug, company.LogoUrl,
                 company.Industry, company.Location, company.IsVerified,
                 company.Jobs.Count(job => job.Status == JobStatus.Published &&
-                    !job.IsHidden && !job.IsDeleted &&
-                    (!job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc > utcNow))))
+                    !job.IsHidden && !job.IsDeleted && job.PublishedAtUtc.HasValue &&
+                    job.ExpiresAtUtc.HasValue && job.ExpiresAtUtc > utcNow)))
             .Where(company => company.ActiveJobCount > 0)
             .OrderByDescending(company => company.ActiveJobCount)
             .ThenByDescending(company => company.IsVerified)
@@ -110,7 +110,7 @@ public sealed class PublicJobRepository(
         return context.Jobs.AsNoTracking().Where(job =>
             job.Status == JobStatus.Published && !job.IsHidden &&
             job.PublishedAtUtc.HasValue &&
-            (!job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc > utcNow));
+            job.ExpiresAtUtc.HasValue && job.ExpiresAtUtc > utcNow);
     }
 
     private static IQueryable<Job> ApplySorting(IQueryable<Job> source, string sortBy, bool descending) =>

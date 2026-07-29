@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using FluentValidation;
+using JobPortal.Domain.Enums;
 
 namespace JobPortal.Application.Features.Jobs;
 
@@ -11,7 +12,10 @@ internal static class JobValidationRules
         Expression<Func<T, string?>> responsibilities, Expression<Func<T, string?>> requirements,
         Expression<Func<T, string?>> benefits, Expression<Func<T, string?>> location,
         Expression<Func<T, decimal?>> minimumSalary, Expression<Func<T, decimal?>> maximumSalary,
-        Expression<Func<T, string>> currencyCode)
+        Expression<Func<T, string>> currencyCode,
+        Expression<Func<T, EmploymentType>> employmentType,
+        Expression<Func<T, WorkplaceType>> workplaceType,
+        Expression<Func<T, ExperienceLevel>> experienceLevel)
     {
         validator.RuleFor(title).NotEmpty().MaximumLength(250);
         validator.RuleFor(description).NotEmpty().MaximumLength(16000);
@@ -24,6 +28,9 @@ internal static class JobValidationRules
         validator.RuleFor(minimumSalary).GreaterThanOrEqualTo(0);
         validator.RuleFor(maximumSalary).GreaterThanOrEqualTo(0);
         validator.RuleFor(currencyCode).NotEmpty().Length(3).Matches("^[A-Za-z]{3}$");
+        validator.RuleFor(employmentType).IsInEnum();
+        validator.RuleFor(workplaceType).IsInEnum();
+        validator.RuleFor(experienceLevel).IsInEnum();
         var minimumSalaryAccessor = minimumSalary.Compile();
         var maximumSalaryAccessor = maximumSalary.Compile();
         validator.RuleFor(maximumSalary)
@@ -39,7 +46,8 @@ public sealed class CreateJobRequestValidator : AbstractValidator<CreateJobReque
     {
         JobValidationRules.Apply(this, x => x.Title, x => x.Description, x => x.CompanyId, x => x.CategoryId,
             x => x.Responsibilities, x => x.Requirements, x => x.Benefits, x => x.Location,
-            x => x.MinimumSalary, x => x.MaximumSalary, x => x.CurrencyCode);
+            x => x.MinimumSalary, x => x.MaximumSalary, x => x.CurrencyCode,
+            x => x.EmploymentType, x => x.WorkplaceType, x => x.ExperienceLevel);
         RuleFor(x => x.ApplicationUrl).NotEmpty().MaximumLength(2048)
             .Must(x => Uri.TryCreate(x, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
             .WithMessage("ApplicationUrl must be an absolute HTTP or HTTPS URL.");
@@ -52,7 +60,8 @@ public sealed class UpdateJobRequestValidator : AbstractValidator<UpdateJobReque
     {
         JobValidationRules.Apply(this, x => x.Title, x => x.Description, x => x.CompanyId, x => x.CategoryId,
             x => x.Responsibilities, x => x.Requirements, x => x.Benefits, x => x.Location,
-            x => x.MinimumSalary, x => x.MaximumSalary, x => x.CurrencyCode);
+            x => x.MinimumSalary, x => x.MaximumSalary, x => x.CurrencyCode,
+            x => x.EmploymentType, x => x.WorkplaceType, x => x.ExperienceLevel);
         RuleFor(x => x.ApplicationUrl).NotEmpty().MaximumLength(2048)
             .Must(x => Uri.TryCreate(x, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
             .WithMessage("ApplicationUrl must be an absolute HTTP or HTTPS URL.");
@@ -75,5 +84,7 @@ public sealed class JobSearchQueryValidator : AbstractValidator<JobSearchQuery>
             .WithMessage("SortDirection must be 'asc' or 'desc'.");
         RuleFor(x => x.PublishedToUtc).GreaterThanOrEqualTo(x => x.PublishedFromUtc)
             .When(x => x.PublishedFromUtc.HasValue && x.PublishedToUtc.HasValue);
+        RuleFor(x => x.ExpiresToUtc).GreaterThanOrEqualTo(x => x.ExpiresFromUtc)
+            .When(x => x.ExpiresFromUtc.HasValue && x.ExpiresToUtc.HasValue);
     }
 }

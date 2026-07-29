@@ -22,7 +22,8 @@ public sealed class CandidateRepository(
         var now = timeProvider.GetUtcNow().UtcDateTime;
         return context.Jobs.AsNoTracking().Where(x => x.Id == jobId &&
                 x.Status == JobStatus.Published && !x.IsHidden &&
-                (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > now))
+                x.PublishedAtUtc.HasValue &&
+                x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc > now)
             .Select(x => new CandidateJob(x.Id, x.Title, x.Slug, x.Company.Name))
             .SingleOrDefaultAsync(cancellationToken);
     }

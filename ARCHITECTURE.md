@@ -90,6 +90,35 @@ Applications require an active portal-wide membership and an available published
 unexpired job. A unique database index prevents any duplicate application for a candidate/job
 pair. Candidates can withdraw only applications still in `Submitted` status.
 
+## Administrator job lifecycle
+
+All job-management routes under `/api/admin/jobs` require the exact `Administrator` role. The
+paginated list supports company, category, status, featured, expiry-range, and keyword filters;
+detail and update operations use the existing validated job DTOs.
+
+- `GET /api/admin/jobs`
+- `GET /api/admin/jobs/{id}`
+- `PUT /api/admin/jobs/{id}`
+- `POST /api/admin/jobs/{id}/publish`
+- `POST /api/admin/jobs/{id}/unpublish`
+- `POST /api/admin/jobs/{id}/close`
+- `POST /api/admin/jobs/{id}/archive`
+- `POST /api/admin/jobs/{id}/feature`
+- `POST /api/admin/jobs/{id}/unfeature`
+
+Publishing revalidates the complete job, its non-deleted company and category, and a mandatory
+future expiry date. Unpublishing returns a Published job to Draft; closing produces Closed;
+archiving is final. Feature status is removed whenever a job is unpublished, closed, archived,
+hidden, or automatically expired. Public output-cache entries are evicted after administrator
+lifecycle changes.
+
+`JobExpiryHostedService` runs a configurable UTC cycle (`JobExpiry:Enabled`,
+`IntervalMinutes`, and `RunOnStartup`). It performs one conditional database update from
+Published to Expired for overdue rows, making repeated runs idempotent, and does not run
+migrations. Only visible Published jobs with a future expiry are eligible for public, related,
+featured, saved-job, or new-application queries. Existing applications remain queryable after
+the associated job closes or expires.
+
 ## Administrator application review
 
 Application-review endpoints require the exact `Administrator` role:

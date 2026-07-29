@@ -142,6 +142,9 @@ public sealed class AdminManagementTests
             Task.FromResult(((IReadOnlyCollection<Job>)[], 0));
         public Task<bool> CompanyExistsAsync(Guid companyId, CancellationToken cancellationToken = default) => Task.FromResult(CompanyExists);
         public Task<bool> CategoryExistsAsync(Guid categoryId, CancellationToken cancellationToken = default) => Task.FromResult(false);
+        public Task<int> ExpireOverduePublishedAsync(
+            DateTime utcNow, CancellationToken cancellationToken = default) =>
+            Task.FromResult(0);
         public Task AddAsync(Job job, CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void Update(Job job) { }
         public void Remove(Job job) { }

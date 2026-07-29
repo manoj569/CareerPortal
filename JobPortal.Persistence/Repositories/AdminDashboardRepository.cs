@@ -32,9 +32,11 @@ public sealed class AdminDashboardRepository(JobPortalDbContext context) : IAdmi
             {
                 Total = group.Count(),
                 Published = group.Count(x => x.Status == JobStatus.Published &&
-                    (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow)),
+                    x.PublishedAtUtc.HasValue &&
+                    x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc > utcNow),
                 Featured = group.Count(x => x.IsFeatured && x.Status == JobStatus.Published &&
-                    !x.IsHidden && (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow)),
+                    !x.IsHidden && x.PublishedAtUtc.HasValue &&
+                    x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc > utcNow),
                 Expired = group.Count(x => x.Status == JobStatus.Expired ||
                     (x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc <= utcNow))
             }).SingleOrDefaultAsync(cancellationToken);
@@ -118,7 +120,8 @@ public sealed class AdminDashboardRepository(JobPortalDbContext context) : IAdmi
         await context.Categories.AsNoTracking()
             .Select(x => new DistributionChartPoint(x.Id, x.Name,
                 x.Jobs.Count(job => job.Status == JobStatus.Published && !job.IsHidden &&
-                    (!job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc > utcNow))))
+                    job.PublishedAtUtc.HasValue &&
+                    job.ExpiresAtUtc.HasValue && job.ExpiresAtUtc > utcNow)))
             .OrderByDescending(x => x.Value).ThenBy(x => x.Label).Take(limit)
             .ToArrayAsync(cancellationToken);
 
@@ -127,7 +130,8 @@ public sealed class AdminDashboardRepository(JobPortalDbContext context) : IAdmi
         await context.Companies.AsNoTracking()
             .Select(x => new DistributionChartPoint(x.Id, x.Name,
                 x.Jobs.Count(job => job.Status == JobStatus.Published && !job.IsHidden &&
-                    (!job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc > utcNow))))
+                    job.PublishedAtUtc.HasValue &&
+                    job.ExpiresAtUtc.HasValue && job.ExpiresAtUtc > utcNow)))
             .OrderByDescending(x => x.Value).ThenBy(x => x.Label).Take(limit)
             .ToArrayAsync(cancellationToken);
 

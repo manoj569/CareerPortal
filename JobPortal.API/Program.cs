@@ -5,6 +5,7 @@ using System.Security.Claims;
 using System.Text;
 using System.Threading.RateLimiting;
 using JobPortal.API.Health;
+using JobPortal.API.HostedServices;
 using JobPortal.API.Middleware;
 using JobPortal.API.Startup;
 using JobPortal.API.Swagger;
@@ -56,6 +57,7 @@ builder.Services.AddOutputCache(options =>
         .SetVaryByHeader("Origin")
         .Tag("public-jobs"));
 });
+builder.Services.AddHostedService<JobExpiryHostedService>();
 
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddPolicy("ConfiguredOrigins", policy =>
@@ -119,7 +121,13 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
     options.OperationFilter<AuthExamplesOperationFilter>();
-    options.SwaggerDoc("v1", new OpenApiInfo { Title = "Job Portal API", Version = "v1" });
+    options.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Job Portal API",
+        Version = "v1",
+        Description =
+            "CareerPortal API including Administrator job lifecycle and application review endpoints."
+    });
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
         Name = "Authorization",

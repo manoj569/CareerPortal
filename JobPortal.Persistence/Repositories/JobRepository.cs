@@ -1,6 +1,7 @@
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Features.Jobs;
 using JobPortal.Domain.Entities;
+using JobPortal.Domain.Enums;
 using JobPortal.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 
@@ -39,6 +40,8 @@ public sealed class JobRepository(JobPortalDbContext context) : IJobRepository
         if (query.IsHidden.HasValue) source = source.Where(x => x.IsHidden == query.IsHidden);
         if (query.PublishedFromUtc.HasValue) source = source.Where(x => x.PublishedAtUtc >= query.PublishedFromUtc);
         if (query.PublishedToUtc.HasValue) source = source.Where(x => x.PublishedAtUtc <= query.PublishedToUtc);
+        if (query.ExpiresFromUtc.HasValue) source = source.Where(x => x.ExpiresAtUtc >= query.ExpiresFromUtc);
+        if (query.ExpiresToUtc.HasValue) source = source.Where(x => x.ExpiresAtUtc <= query.ExpiresToUtc);
 
         var totalCount = await source.CountAsync(cancellationToken);
         source = ApplySorting(source, query.SortBy, query.SortDirection.Equals("desc", StringComparison.OrdinalIgnoreCase));
@@ -50,6 +53,15 @@ public sealed class JobRepository(JobPortalDbContext context) : IJobRepository
         context.Companies.AnyAsync(x => x.Id == companyId, cancellationToken);
     public Task<bool> CategoryExistsAsync(Guid categoryId, CancellationToken cancellationToken = default) =>
         context.Categories.AnyAsync(x => x.Id == categoryId, cancellationToken);
+    public Task<int> ExpireOverduePublishedAsync(
+        DateTime utcNow, CancellationToken cancellationToken = default) =>
+        context.Jobs
+            .Where(x => x.Status == JobStatus.Published &&
+                x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc <= utcNow)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(x => x.Status, JobStatus.Expired)
+                .SetProperty(x => x.IsFeatured, false)
+                .SetProperty(x => x.UpdatedAtUtc, utcNow), cancellationToken);
     public Task AddAsync(Job job, CancellationToken cancellationToken = default) =>
         context.Jobs.AddAsync(job, cancellationToken).AsTask();
     public void Update(Job job) => context.Jobs.Update(job);

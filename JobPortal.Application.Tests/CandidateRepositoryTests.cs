@@ -64,6 +64,7 @@ public sealed class CandidateRepositoryTests
         Description = "Description",
         ApplicationUrl = "https://example.test/apply",
         Status = status,
+        PublishedAtUtc = status == JobStatus.Published ? Now.AddDays(-1) : null,
         ExpiresAtUtc = expiresAtUtc
     };
 

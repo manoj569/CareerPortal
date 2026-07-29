@@ -141,6 +141,7 @@ public sealed class JobConfiguration : IEntityTypeConfiguration<Job>
         builder.HasIndex(x => new { x.CompanyId, x.Status, x.PublishedAtUtc });
         builder.HasIndex(x => new { x.CategoryId, x.Status });
         builder.HasIndex(x => new { x.Status, x.IsFeatured, x.IsHidden, x.PublishedAtUtc });
+        builder.HasIndex(x => new { x.Status, x.ExpiresAtUtc });
         builder.HasIndex(x => x.ExpiresAtUtc);
         builder.HasIndex(x => x.CreatedAtUtc);
         builder.HasOne(x => x.Company).WithMany(x => x.Jobs).HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);

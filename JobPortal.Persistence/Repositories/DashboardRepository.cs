@@ -20,7 +20,8 @@ public sealed class DashboardRepository(
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         var source = context.SavedJobs.AsNoTracking().Where(x => x.UserId == userId &&
             x.Job.Status == JobStatus.Published && !x.Job.IsHidden &&
-            (!x.Job.ExpiresAtUtc.HasValue || x.Job.ExpiresAtUtc > utcNow));
+            x.Job.PublishedAtUtc.HasValue &&
+            x.Job.ExpiresAtUtc.HasValue && x.Job.ExpiresAtUtc > utcNow);
         var count = await source.CountAsync(cancellationToken);
         var items = await source.OrderByDescending(x => x.CreatedAtUtc).ThenByDescending(x => x.Id)
             .Skip((query.PageNumber - 1) * query.PageSize).Take(query.PageSize)
@@ -34,7 +35,8 @@ public sealed class DashboardRepository(
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         return context.Jobs.AsNoTracking().AnyAsync(x => x.Id == jobId &&
             x.Status == JobStatus.Published && !x.IsHidden &&
-            (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow), cancellationToken);
+            x.PublishedAtUtc.HasValue &&
+            x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc > utcNow, cancellationToken);
     }
 
     public Task<bool> IsJobSavedAsync(Guid userId, Guid jobId, CancellationToken cancellationToken = default) =>

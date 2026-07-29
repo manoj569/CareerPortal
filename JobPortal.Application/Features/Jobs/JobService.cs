@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using FluentValidation;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Jobs;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
@@ -13,6 +14,7 @@ namespace JobPortal.Application.Features.Jobs;
 public sealed class JobService(
     IJobRepository jobs,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<CreateJobRequest> createValidator,
     IValidator<UpdateJobRequest> updateValidator,
     IValidator<JobSearchQuery> searchValidator,
@@ -37,6 +39,12 @@ public sealed class JobService(
             request.WorkplaceType, request.ExperienceLevel, request.ExpiresAtUtc));
 
         await jobs.AddAsync(job, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Create,
+            "Job",
+            job.Id.ToString(),
+            new Dictionary<string, string?> { ["status"] = JobStatus.Draft.ToString() }),
+            cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return (await RequiredJobAsync(job.Id, false, cancellationToken)).ToResponse();
     }
@@ -58,6 +66,16 @@ public sealed class JobService(
         job.Apply(request);
         job.Slug = $"{Slugify(request.Title)}-{job.Id.ToString("N")[..8]}";
         jobs.Update(job);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "Job",
+            job.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["companyId"] = job.CompanyId.ToString(),
+                ["categoryId"] = job.CategoryId.ToString(),
+                ["status"] = job.Status.ToString()
+            }), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return (await RequiredJobAsync(id, false, cancellationToken)).ToResponse();
     }
@@ -66,6 +84,8 @@ public sealed class JobService(
     {
         var job = await RequiredJobAsync(id, false, cancellationToken);
         jobs.Remove(job);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Delete, "Job", job.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -96,12 +116,12 @@ public sealed class JobService(
         job.PublishedAtUtc = UtcNow;
         job.IsFeatured = false;
         job.IsHidden = false;
-        return await SaveStateChangeAsync(job, cancellationToken);
+        return await SaveStateChangeAsync(job, AuditAction.Publish, cancellationToken);
     }
 
     public Task<JobResponse> UnpublishAsync(
         Guid id, CancellationToken cancellationToken = default) =>
-        ChangeAsync(id, job =>
+        ChangeAsync(id, AuditAction.Unpublish, job =>
         {
             if (job.Status != JobStatus.Published)
                 throw new ConflictException("Only a published job can be unpublished.");
@@ -112,7 +132,7 @@ public sealed class JobService(
 
     public Task<JobResponse> CloseAsync(
         Guid id, CancellationToken cancellationToken = default) =>
-        ChangeAsync(id, job =>
+        ChangeAsync(id, AuditAction.Close, job =>
         {
             if (job.Status != JobStatus.Published)
                 throw new ConflictException("Only a published job can be closed.");
@@ -121,7 +141,7 @@ public sealed class JobService(
         }, cancellationToken);
 
     public Task<JobResponse> ArchiveAsync(Guid id, CancellationToken cancellationToken = default) =>
-        ChangeAsync(id, job =>
+        ChangeAsync(id, AuditAction.Archive, job =>
         {
             if (job.Status == JobStatus.Archived)
                 throw new ConflictException("The job is already archived.");
@@ -130,7 +150,10 @@ public sealed class JobService(
         }, cancellationToken);
 
     public Task<JobResponse> SetFeaturedAsync(Guid id, bool isFeatured, CancellationToken cancellationToken = default) =>
-        ChangeAsync(id, job =>
+        ChangeAsync(
+            id,
+            isFeatured ? AuditAction.Feature : AuditAction.Unfeature,
+            job =>
         {
             if (isFeatured && (job.Status != JobStatus.Published ||
                 job.IsHidden || !job.ExpiresAtUtc.HasValue || job.ExpiresAtUtc <= UtcNow))
@@ -140,7 +163,7 @@ public sealed class JobService(
         }, cancellationToken);
 
     public Task<JobResponse> SetHiddenAsync(Guid id, bool isHidden, CancellationToken cancellationToken = default) =>
-        ChangeAsync(id, job =>
+        ChangeAsync(id, null, job =>
         {
             job.IsHidden = isHidden;
             if (isHidden)
@@ -155,17 +178,35 @@ public sealed class JobService(
             query.PageNumber, query.PageSize, result.TotalCount);
     }
 
-    private async Task<JobResponse> ChangeAsync(Guid id, Action<Job> change, CancellationToken cancellationToken)
+    private async Task<JobResponse> ChangeAsync(
+        Guid id,
+        AuditAction? auditAction,
+        Action<Job> change,
+        CancellationToken cancellationToken)
     {
         var job = await RequiredJobAsync(id, false, cancellationToken);
         change(job);
-        return await SaveStateChangeAsync(job, cancellationToken);
+        return await SaveStateChangeAsync(job, auditAction, cancellationToken);
     }
 
     private async Task<JobResponse> SaveStateChangeAsync(
-        Job job, CancellationToken cancellationToken)
+        Job job,
+        AuditAction? auditAction,
+        CancellationToken cancellationToken)
     {
         jobs.Update(job);
+        if (auditAction.HasValue)
+        {
+            await auditWriter.AppendAsync(new(
+                auditAction.Value,
+                "Job",
+                job.Id.ToString(),
+                new Dictionary<string, string?>
+                {
+                    ["status"] = job.Status.ToString(),
+                    ["isFeatured"] = job.IsFeatured.ToString()
+                }), cancellationToken);
+        }
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return (await RequiredJobAsync(job.Id, false, cancellationToken)).ToResponse();
     }

@@ -18,7 +18,7 @@ public sealed class AdminManagementTests
     public async Task DeletedOrInvalidCompanyAndCategoryCannotBeAssignedToJob()
     {
         var repository = new JobRepositoryFake();
-        var service = new JobService(repository, new UnitOfWorkFake(), new CreateJobRequestValidator(),
+        var service = new JobService(repository, new UnitOfWorkFake(), new AuditWriterTestDouble(), new CreateJobRequestValidator(),
             new UpdateJobRequestValidator(), new JobSearchQueryValidator(), TimeProvider.System);
         var request = ValidJobRequest();
 
@@ -77,11 +77,11 @@ public sealed class AdminManagementTests
     }
 
     private static CompanyManagementService CompanyService(CompanyRepositoryFake repository) =>
-        new(repository, new UnitOfWorkFake(), new CreateCompanyRequestValidator(),
+        new(repository, new UnitOfWorkFake(), new AuditWriterTestDouble(), new CreateCompanyRequestValidator(),
             new UpdateCompanyRequestValidator(), new CompanySearchQueryValidator());
 
     private static CategoryManagementService CategoryService(CategoryRepositoryFake repository) =>
-        new(repository, new UnitOfWorkFake(), new CreateCategoryRequestValidator(),
+        new(repository, new UnitOfWorkFake(), new AuditWriterTestDouble(), new CreateCategoryRequestValidator(),
             new UpdateCategoryRequestValidator(), new CategorySearchQueryValidator());
 
     private static CreateJobRequest ValidJobRequest() => new(

@@ -330,10 +330,15 @@ public sealed class AuditLogConfiguration : IEntityTypeConfiguration<AuditLog>
         builder.Property(x => x.EntityName).HasMaxLength(200).IsRequired();
         builder.Property(x => x.EntityId).HasMaxLength(64).IsRequired();
         builder.Property(x => x.ChangesJson).HasColumnType("nvarchar(max)");
+        builder.Property(x => x.ActorRole).HasMaxLength(50);
+        builder.Property(x => x.CorrelationId).HasMaxLength(64);
         builder.Property(x => x.IpAddress).HasMaxLength(45);
         builder.Property(x => x.UserAgent).HasMaxLength(1024);
         builder.HasIndex(x => new { x.EntityName, x.EntityId, x.CreatedAtUtc });
         builder.HasIndex(x => new { x.UserId, x.CreatedAtUtc });
+        builder.HasIndex(x => new { x.Action, x.CreatedAtUtc });
+        builder.HasIndex(x => new { x.CorrelationId, x.CreatedAtUtc });
+        builder.HasIndex(x => x.CreatedAtUtc);
         builder.HasOne(x => x.User).WithMany(x => x.AuditLogs).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
     }
 }

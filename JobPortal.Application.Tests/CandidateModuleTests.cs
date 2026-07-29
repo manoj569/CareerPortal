@@ -1,3 +1,4 @@
+using System.Text.Json;
 using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
@@ -59,6 +60,10 @@ public sealed class CandidateModuleTests
 
         Assert.Equal("resume.pdf", submitted.ResumeFileName);
         Assert.Equal("current.pdf", fixture.Repository.AddedApplications.Single().ResumeStorageKey);
+        Assert.Contains(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.Submit &&
+                audit.EntityId == fixture.Repository.AddedApplications.Single().Id.ToString());
         var history = Assert.Single(fixture.Repository.AddedApplications.Single().StatusHistory);
         Assert.Null(history.PreviousStatus);
         Assert.Equal(JobApplicationStatus.Submitted, history.NewStatus);
@@ -117,6 +122,11 @@ public sealed class CandidateModuleTests
         Assert.Single(fixture.Storage.Stored);
         Assert.DoesNotContain("prior.pdf", fixture.Storage.Deleted);
         Assert.DoesNotContain("unsafe", fixture.Storage.Stored.Single(), StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.Upload &&
+                !JsonSerializer.Serialize(audit).Contains(
+                    "unsafe", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -178,12 +188,13 @@ public sealed class CandidateModuleTests
         var dashboard = new FakeDashboardRepository();
         var storage = new FakeResumeStorage();
         var unitOfWork = new FakeUnitOfWork();
+        var audit = new AuditWriterTestDouble();
         var service = new CandidateService(
-            repository, dashboard, storage, unitOfWork,
+            repository, dashboard, storage, unitOfWork, audit,
             new UpdateCandidateProfileRequestValidator(), new CandidatePageQueryValidator(),
             new JobApplicationQueryValidator(), new CreateJobApplicationRequestValidator(),
             TimeProvider.System);
-        return new(service, repository, dashboard, storage, unitOfWork, candidate, job);
+        return new(service, repository, dashboard, storage, unitOfWork, audit, candidate, job);
     }
 
     private sealed record Fixture(
@@ -192,6 +203,7 @@ public sealed class CandidateModuleTests
         FakeDashboardRepository Dashboard,
         FakeResumeStorage Storage,
         FakeUnitOfWork UnitOfWork,
+        AuditWriterTestDouble Audit,
         User Candidate,
         Job Job)
     {

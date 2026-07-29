@@ -7,9 +7,11 @@ using System.Threading.RateLimiting;
 using JobPortal.API.Health;
 using JobPortal.API.HostedServices;
 using JobPortal.API.Middleware;
+using JobPortal.API.Services;
 using JobPortal.API.Startup;
 using JobPortal.API.Swagger;
 using JobPortal.Application;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Infrastructure;
 using JobPortal.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -31,6 +33,8 @@ builder.Host.UseSerilog((context, services, configuration) => configuration
     .Enrich.FromLogContext());
 
 builder.Services.AddControllers();
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<IAuditContextAccessor, HttpAuditContextAccessor>();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
 {
@@ -126,7 +130,7 @@ builder.Services.AddSwaggerGen(options =>
         Title = "Job Portal API",
         Version = "v1",
         Description =
-            "CareerPortal API including Administrator job lifecycle and application review endpoints."
+            "CareerPortal API including Administrator job lifecycle, application review, and append-only audit search endpoints."
     });
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {

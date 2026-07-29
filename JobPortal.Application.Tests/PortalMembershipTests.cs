@@ -194,6 +194,21 @@ public sealed class PortalMembershipTests
         Assert.Equal(Now.AddDays(30), firstEnd);
         Assert.Equal(firstEnd, fixture.Memberships.Membership.EndsAtUtc);
         Assert.Single(fixture.Payments.Payment!.History, x => x.CurrentStatus == PaymentStatus.Paid);
+        Assert.Single(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.Create &&
+                audit.EntityType == "Payment");
+        Assert.Single(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.Confirm &&
+                audit.EntityType == "Payment");
+        Assert.Single(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.Activate &&
+                audit.EntityType == "Membership");
+        var auditJson = JsonSerializer.Serialize(fixture.Audit.Events);
+        Assert.DoesNotContain(request.RazorpaySignature, auditJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(request.RazorpayPaymentId, auditJson, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -215,6 +230,14 @@ public sealed class PortalMembershipTests
         Assert.Equal(firstEnd, fixture.Memberships.Membership.EndsAtUtc);
         Assert.Contains("Duplicate", duplicate.Outcome, StringComparison.Ordinal);
         Assert.Single(fixture.Payments.Payment.History, x => x.ProviderEventId == "event_1");
+        Assert.Contains(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.WebhookSuccess &&
+                audit.Actor?.Role == "RazorpayWebhook");
+        Assert.DoesNotContain(
+            "event_1",
+            JsonSerializer.Serialize(fixture.Audit.Events),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -282,11 +305,13 @@ public sealed class PortalMembershipTests
         var users = new FakeUserRepository();
         var gateway = new FakeRazorpayGateway();
         var unitOfWork = new FakeUnitOfWork();
+        var audit = new AuditWriterTestDouble();
         var service = new PaymentService(
             payments, memberships, users, gateway, new FakePlanProvider(), unitOfWork,
+            audit,
             new CreatePaymentOrderRequestValidator(), new ConfirmRazorpayPaymentRequestValidator(),
             new FixedTimeProvider(Now));
-        return new(service, memberships, payments, users, gateway, unitOfWork);
+        return new(service, memberships, payments, users, gateway, unitOfWork, audit);
     }
 
     private sealed record PaymentFixture(
@@ -295,7 +320,8 @@ public sealed class PortalMembershipTests
         FakePaymentRepository Payments,
         FakeUserRepository Users,
         FakeRazorpayGateway Gateway,
-        FakeUnitOfWork UnitOfWork);
+        FakeUnitOfWork UnitOfWork,
+        AuditWriterTestDouble Audit);
 
     private sealed class FakeMembershipRepository : IMembershipRepository
     {

@@ -45,6 +45,12 @@ public sealed class AdminApplicationManagementTests
         Assert.Equal(Now, history.ChangedAtUtc);
         Assert.Equal("Private hiring note", history.InternalNote);
         Assert.Equal(1, fixture.UnitOfWork.SaveCount);
+        var audit = Assert.Single(fixture.Audit.Events);
+        Assert.Equal(AuditAction.Update, audit.Action);
+        Assert.DoesNotContain(
+            "Private hiring note",
+            JsonSerializer.Serialize(audit),
+            StringComparison.Ordinal);
     }
 
     [Theory]
@@ -302,18 +308,20 @@ public sealed class AdminApplicationManagementTests
         var storage = new ResumeStorageFake();
         var unitOfWork = new CountingUnitOfWork();
         var email = new StatusEmailFake(unitOfWork);
+        var audit = new AuditWriterTestDouble();
         var service = new AdminApplicationService(
             repository,
             users,
             storage,
             email,
             unitOfWork,
+            audit,
             new AdminApplicationQueryValidator(),
             new UpdateAdminApplicationStatusRequestValidator(),
             new FixedTimeProvider(Now));
         return new(
             service, repository, users, storage, email, unitOfWork,
-            administrator, application);
+            audit, administrator, application);
     }
 
     private sealed record Fixture(
@@ -323,6 +331,7 @@ public sealed class AdminApplicationManagementTests
         ResumeStorageFake Storage,
         StatusEmailFake Email,
         CountingUnitOfWork UnitOfWork,
+        AuditWriterTestDouble Audit,
         User Administrator,
         JobApplication Application);
 

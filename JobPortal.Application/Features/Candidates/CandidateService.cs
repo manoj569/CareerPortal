@@ -1,5 +1,6 @@
 using System.Text.Json;
 using FluentValidation;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
@@ -16,6 +17,7 @@ public sealed class CandidateService(
     IDashboardRepository dashboard,
     IResumeStorage resumeStorage,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<UpdateCandidateProfileRequest> profileValidator,
     IValidator<CandidatePageQuery> pageValidator,
     IValidator<JobApplicationQuery> applicationQueryValidator,
@@ -47,6 +49,11 @@ public sealed class CandidateService(
         user.EducationJson = SerializeStrings(request.Education);
         user.ExperienceJson = SerializeStrings(request.Experience);
         user.PreferredJobTypesJson = JsonSerializer.Serialize(request.PreferredJobTypes.Distinct());
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "CandidateProfile",
+            user.Id.ToString(),
+            Actor: new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapProfile(user);
     }
@@ -64,6 +71,17 @@ public sealed class CandidateService(
         user.ResumeContentType = upload.ContentType;
         user.ResumeSizeBytes = content.Length;
         user.ResumeUploadedAtUtc = UtcNow;
+        await auditWriter.AppendAsync(new(
+            AuditAction.Upload,
+            "Resume",
+            user.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["fileType"] = extension,
+                ["sizeBytes"] = content.Length.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture)
+            },
+            new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await DeleteIfUnreferencedAsync(oldKey, cancellationToken);
         return MapResume(user)!;
@@ -89,6 +107,11 @@ public sealed class CandidateService(
         user.ResumeContentType = null;
         user.ResumeSizeBytes = null;
         user.ResumeUploadedAtUtc = null;
+        await auditWriter.AppendAsync(new(
+            AuditAction.Delete,
+            "Resume",
+            user.Id.ToString(),
+            Actor: new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await DeleteIfUnreferencedAsync(storageKey, cancellationToken);
     }
@@ -111,7 +134,14 @@ public sealed class CandidateService(
         if (!await dashboard.IsAvailableJobAsync(jobId, cancellationToken))
             throw new NotFoundException("Job was not found.");
         if (await dashboard.IsJobSavedAsync(userId, jobId, cancellationToken)) return;
-        await dashboard.AddSavedJobAsync(new SavedJob { UserId = userId, JobId = jobId }, cancellationToken);
+        var savedJob = new SavedJob { UserId = userId, JobId = jobId };
+        await dashboard.AddSavedJobAsync(savedJob, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Create,
+            "SavedJob",
+            savedJob.Id.ToString(),
+            new Dictionary<string, string?> { ["jobId"] = jobId.ToString() },
+            new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -121,6 +151,12 @@ public sealed class CandidateService(
         var saved = await dashboard.GetSavedJobAsync(userId, jobId, cancellationToken);
         if (saved is null) return;
         dashboard.RemoveSavedJob(saved);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Delete,
+            "SavedJob",
+            saved.Id.ToString(),
+            new Dictionary<string, string?> { ["jobId"] = jobId.ToString() },
+            new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -155,6 +191,16 @@ public sealed class CandidateService(
             ChangedAtUtc = UtcNow
         });
         await candidates.AddApplicationAsync(application, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Submit,
+            "JobApplication",
+            application.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["jobId"] = jobId.ToString(),
+                ["status"] = JobApplicationStatus.Submitted.ToString()
+            },
+            new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapApplication(application, job);
     }
@@ -197,6 +243,16 @@ public sealed class CandidateService(
             NewStatus = JobApplicationStatus.Withdrawn,
             ChangedAtUtc = UtcNow
         });
+        await auditWriter.AppendAsync(new(
+            AuditAction.Withdraw,
+            "JobApplication",
+            application.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["previousStatus"] = previous.ToString(),
+                ["newStatus"] = JobApplicationStatus.Withdrawn.ToString()
+            },
+            new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapApplication(application,
             new CandidateJob(application.JobId, application.Job.Title, application.Job.Slug, application.Job.Company.Name));

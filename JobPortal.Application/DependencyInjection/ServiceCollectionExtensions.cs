@@ -2,6 +2,7 @@ using FluentValidation;
 using JobPortal.Application.Abstractions.AdminApplications;
 using JobPortal.Application.Abstractions.AdminDashboard;
 using JobPortal.Application.Abstractions.AdminManagement;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Dashboard;
@@ -11,6 +12,7 @@ using JobPortal.Application.Abstractions.Payments;
 using JobPortal.Application.Features.AdminApplications;
 using JobPortal.Application.Features.AdminDashboard;
 using JobPortal.Application.Features.AdminManagement;
+using JobPortal.Application.Features.Auditing;
 using JobPortal.Application.Features.Authentication;
 using JobPortal.Application.Features.Candidates;
 using JobPortal.Application.Features.Dashboard;
@@ -28,6 +30,8 @@ public static class ServiceCollectionExtensions
     {
         services.AddValidatorsFromAssembly(typeof(ServiceCollectionExtensions).Assembly);
         services.AddScoped<IAuthService, AuthService>();
+        services.AddScoped<IAuditWriter, AuditWriter>();
+        services.AddScoped<IAuditLogService, AuditLogService>();
         services.AddScoped<AdminBootstrapService>();
         services.AddScoped<ICandidateService, CandidateService>();
         services.AddScoped<IJobService, JobService>();

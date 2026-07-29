@@ -20,6 +20,27 @@ public enum WorkplaceType { OnSite = 1, Remote, Hybrid }
 public enum ExperienceLevel { Entry = 1, Junior, Mid, Senior, Lead, Executive }
 public enum JobHistoryAction { Viewed = 1, Saved, Applied, Withdrawn, Rejected, Shortlisted, Hired }
 public enum NotificationType { General = 1, Job, Application, Payment, Membership, Security }
-public enum AuditAction { Create = 1, Update, Delete, Restore, Login, Logout }
+public enum AuditAction
+{
+    Create = 1,
+    Update,
+    Delete,
+    Restore,
+    Login,
+    Logout,
+    Publish,
+    Unpublish,
+    Close,
+    Archive,
+    Feature,
+    Unfeature,
+    Upload,
+    Submit,
+    Withdraw,
+    Confirm,
+    WebhookSuccess,
+    WebhookFailure,
+    Activate
+}
 public enum SettingScope { Global = 1, User, Company }
 public enum JobApplicationStatus { Submitted = 1, Reviewed, Shortlisted, Rejected, Withdrawn }

@@ -1,9 +1,11 @@
 using FluentValidation;
 using JobPortal.Application.Abstractions.AdminManagement;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
 using JobPortal.Application.Common.Text;
 using JobPortal.Domain.Entities;
+using JobPortal.Domain.Enums;
 using JobPortal.Shared.Models;
 
 namespace JobPortal.Application.Features.AdminManagement;
@@ -11,6 +13,7 @@ namespace JobPortal.Application.Features.AdminManagement;
 public sealed class CompanyManagementService(
     ICompanyManagementRepository companies,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<CreateCompanyRequest> createValidator,
     IValidator<UpdateCompanyRequest> updateValidator,
     IValidator<CompanySearchQuery> searchValidator) : ICompanyManagementService
@@ -36,6 +39,11 @@ public sealed class CompanyManagementService(
         Apply(company, request.Name, slug, request.Description, request.WebsiteUrl, request.LogoUrl,
             request.Industry, request.Location, request.EmployeeCount, request.IsVerified);
         await companies.AddAsync(company, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Create,
+            "Company",
+            company.Id.ToString(),
+            Actor: new(administratorUserId, "Administrator")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await GetByIdAsync(company.Id, cancellationToken);
     }
@@ -49,6 +57,8 @@ public sealed class CompanyManagementService(
         await EnsureUniqueSlugAsync(slug, id, cancellationToken);
         Apply(company, request.Name, slug, request.Description, request.WebsiteUrl, request.LogoUrl,
             request.Industry, request.Location, request.EmployeeCount, request.IsVerified);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update, "Company", company.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await GetByIdAsync(id, cancellationToken);
     }
@@ -60,6 +70,8 @@ public sealed class CompanyManagementService(
         if (await companies.HasJobsAsync(id, cancellationToken))
             throw new ConflictException("A company referenced by jobs cannot be deleted.");
         companies.Remove(company);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Delete, "Company", company.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -98,6 +110,7 @@ public sealed class CompanyManagementService(
 public sealed class CategoryManagementService(
     ICategoryManagementRepository categories,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<CreateCategoryRequest> createValidator,
     IValidator<UpdateCategoryRequest> updateValidator,
     IValidator<CategorySearchQuery> searchValidator) : ICategoryManagementService
@@ -122,6 +135,8 @@ public sealed class CategoryManagementService(
         var category = new Category();
         Apply(category, request.Name, slug, request.Description, request.DisplayOrder, request.ParentCategoryId);
         await categories.AddAsync(category, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Create, "Category", category.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await GetByIdAsync(category.Id, cancellationToken);
     }
@@ -135,6 +150,8 @@ public sealed class CategoryManagementService(
         var slug = RequiredSlug(request.Slug, request.Name);
         await EnsureUniqueSlugAsync(slug, id, cancellationToken);
         Apply(category, request.Name, slug, request.Description, request.DisplayOrder, request.ParentCategoryId);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update, "Category", category.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await GetByIdAsync(id, cancellationToken);
     }
@@ -146,6 +163,8 @@ public sealed class CategoryManagementService(
         if (await categories.HasChildrenOrJobsAsync(id, cancellationToken))
             throw new ConflictException("A category referenced by active children or jobs cannot be deleted.");
         categories.Remove(category);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Delete, "Category", category.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 

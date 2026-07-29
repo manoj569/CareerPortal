@@ -1,4 +1,5 @@
 using FluentValidation;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Application.Abstractions.Dashboard;
 using JobPortal.Application.Abstractions.Memberships;
@@ -21,6 +22,7 @@ public sealed class DashboardService(
     IPaymentService paymentService,
     IAuthService authService,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<UpdateUserProfileRequest> profileValidator,
     TimeProvider timeProvider) : IDashboardService
 {
@@ -39,6 +41,10 @@ public sealed class DashboardService(
         user.ProfileImageUrl = TextNormalizer.TrimOrNull(request.ProfileImageUrl);
         user.Headline = TextNormalizer.TrimOrNull(request.Headline);
         user.Bio = TextNormalizer.TrimOrNull(request.Bio);
+        await auditWriter.AppendAsync(new(
+            JobPortal.Domain.Enums.AuditAction.Update,
+            "UserProfile",
+            user.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapProfile(user);
     }
@@ -68,7 +74,14 @@ public sealed class DashboardService(
         if (!await dashboard.IsAvailableJobAsync(jobId, cancellationToken))
             throw new NotFoundException("Job was not found.");
         if (await dashboard.IsJobSavedAsync(userId, jobId, cancellationToken)) return;
-        await dashboard.AddSavedJobAsync(new SavedJob { UserId = userId, JobId = jobId }, cancellationToken);
+        var savedJob = new SavedJob { UserId = userId, JobId = jobId };
+        await dashboard.AddSavedJobAsync(savedJob, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            JobPortal.Domain.Enums.AuditAction.Create,
+            "SavedJob",
+            savedJob.Id.ToString(),
+            new Dictionary<string, string?> { ["jobId"] = jobId.ToString() }),
+            cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
@@ -77,6 +90,12 @@ public sealed class DashboardService(
         var savedJob = await dashboard.GetSavedJobAsync(userId, jobId, cancellationToken);
         if (savedJob is null) return;
         dashboard.RemoveSavedJob(savedJob);
+        await auditWriter.AppendAsync(new(
+            JobPortal.Domain.Enums.AuditAction.Delete,
+            "SavedJob",
+            savedJob.Id.ToString(),
+            new Dictionary<string, string?> { ["jobId"] = jobId.ToString() }),
+            cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 

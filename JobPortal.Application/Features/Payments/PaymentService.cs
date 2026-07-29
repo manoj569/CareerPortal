@@ -1,6 +1,8 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text.Json;
 using FluentValidation;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Payments;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
@@ -20,6 +22,7 @@ public sealed class PaymentService(
     IRazorpayGateway razorpay,
     IMembershipPlanProvider plans,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<CreatePaymentOrderRequest> createOrderValidator,
     IValidator<ConfirmRazorpayPaymentRequest> confirmValidator,
     TimeProvider timeProvider) : IPaymentService
@@ -99,6 +102,18 @@ public sealed class PaymentService(
             payment.Status = PaymentStatus.Pending;
             payment.History.Add(NewPaymentHistory(
                 payment, PaymentStatus.Created, PaymentStatus.Pending, userId, "Provider order created."));
+            await auditWriter.AppendAsync(new(
+                AuditAction.Create,
+                "Payment",
+                payment.Id.ToString(),
+                new Dictionary<string, string?>
+                {
+                    ["amount"] = payment.Amount.ToString(CultureInfo.InvariantCulture),
+                    ["currency"] = payment.CurrencyCode,
+                    ["provider"] = PaymentProvider.Razorpay.ToString(),
+                    ["status"] = PaymentStatus.Pending.ToString()
+                },
+                new(userId, "Candidate")), cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
             return new PaymentOrderResponse(
                 payment.Id, membership.Id, order.Id, razorpay.KeyId, order.Amount,
@@ -150,7 +165,14 @@ public sealed class PaymentService(
         }
         ValidateProviderPaymentState(payment, providerState, request.RazorpayPaymentId);
         await CompletePaymentAsync(
-            payment, request.RazorpayPaymentId, "Checkout signature verified.", null, cancellationToken);
+            payment,
+            request.RazorpayPaymentId,
+            "Checkout signature verified.",
+            null,
+            AuditAction.Confirm,
+            "Checkout",
+            new(userId, "Candidate"),
+            cancellationToken);
         return ToResponse(payment);
     }
 
@@ -179,8 +201,14 @@ public sealed class PaymentService(
             case RazorpayPaymentStateKind.Paid:
                 ValidateProviderPaymentState(payment, state);
                 await CompletePaymentAsync(
-                    payment, state.PaymentId!, "Razorpay reconciliation confirmed capture.",
-                    null, cancellationToken);
+                    payment,
+                    state.PaymentId!,
+                    "Razorpay reconciliation confirmed capture.",
+                    null,
+                    AuditAction.Confirm,
+                    "Reconciliation",
+                    new(userId, "Candidate"),
+                    cancellationToken);
                 break;
             case RazorpayPaymentStateKind.Failed:
                 ValidateProviderPaymentState(payment, state);
@@ -249,13 +277,25 @@ public sealed class PaymentService(
                 payment.History.Add(NewPaymentHistory(
                     payment, PaymentStatus.Paid, PaymentStatus.Paid, payment.UserId,
                     "Successful webhook acknowledged.", providerEventId));
+                await AppendWebhookAuditAsync(
+                    payment,
+                    AuditAction.WebhookSuccess,
+                    "Acknowledged",
+                    null,
+                    cancellationToken);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
             else
             {
                 await CompletePaymentAsync(
-                    payment, webhook.PaymentId, "Razorpay webhook confirmed capture.",
-                    providerEventId, cancellationToken);
+                    payment,
+                    webhook.PaymentId,
+                    "Razorpay webhook confirmed capture.",
+                    providerEventId,
+                    AuditAction.WebhookSuccess,
+                    "Webhook",
+                    new(null, "RazorpayWebhook"),
+                    cancellationToken);
             }
             return new("Payment event processed.");
         }
@@ -265,10 +305,22 @@ public sealed class PaymentService(
             payment.History.Add(NewPaymentHistory(
                 payment, PaymentStatus.Paid, PaymentStatus.Paid, payment.UserId,
                 "Late failure event ignored for paid payment.", providerEventId));
+            await AppendWebhookAuditAsync(
+                payment,
+                AuditAction.WebhookFailure,
+                "IgnoredPaidPayment",
+                null,
+                cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
         else
         {
+            await AppendWebhookAuditAsync(
+                payment,
+                AuditAction.WebhookFailure,
+                "Failed",
+                PaymentStatus.Failed,
+                cancellationToken);
             await TransitionToTerminalAsync(
                 payment, PaymentStatus.Failed, webhook.PaymentId,
                 "Razorpay webhook reported payment failure.", cancellationToken, providerEventId);
@@ -295,7 +347,13 @@ public sealed class PaymentService(
     }
 
     private async Task CompletePaymentAsync(
-        Payment payment, string providerPaymentId, string reason, string? providerEventId,
+        Payment payment,
+        string providerPaymentId,
+        string reason,
+        string? providerEventId,
+        AuditAction paymentAuditAction,
+        string auditSource,
+        AuditActor auditActor,
         CancellationToken cancellationToken)
     {
         if (payment.Status == PaymentStatus.Paid) return;
@@ -322,8 +380,47 @@ public sealed class PaymentService(
         membership.History.Add(NewMembershipHistory(
             membership, previousMembershipStatus, MembershipStatus.Active,
             payment.UserId, "Verified Razorpay payment completed."));
+        await auditWriter.AppendAsync(new(
+            paymentAuditAction,
+            "Payment",
+            payment.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["provider"] = PaymentProvider.Razorpay.ToString(),
+                ["source"] = auditSource,
+                ["status"] = PaymentStatus.Paid.ToString()
+            },
+            auditActor), cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Activate,
+            "Membership",
+            membership.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["membershipStatus"] = MembershipStatus.Active.ToString(),
+                ["source"] = auditSource
+            },
+            auditActor), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
+
+    private Task AppendWebhookAuditAsync(
+        Payment payment,
+        AuditAction action,
+        string result,
+        PaymentStatus? resultingStatus,
+        CancellationToken cancellationToken) =>
+        auditWriter.AppendAsync(new(
+            action,
+            "Payment",
+            payment.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["provider"] = PaymentProvider.Razorpay.ToString(),
+                ["result"] = result,
+                ["status"] = (resultingStatus ?? payment.Status).ToString()
+            },
+            new(null, "RazorpayWebhook")), cancellationToken);
 
     private async Task TransitionToTerminalAsync(
         Payment payment, PaymentStatus status, string? providerPaymentId, string reason,

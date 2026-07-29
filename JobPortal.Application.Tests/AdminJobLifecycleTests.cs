@@ -45,6 +45,10 @@ public sealed class AdminJobLifecycleTests
         Assert.Equal(Now, response.PublishedAtUtc);
         Assert.False(response.IsHidden);
         Assert.False(response.IsFeatured);
+        Assert.Contains(
+            fixture.Audit.Events,
+            audit => audit.Action == AuditAction.Publish &&
+                audit.EntityId == fixture.Job.Id.ToString());
     }
 
     [Fact]
@@ -183,14 +187,16 @@ public sealed class AdminJobLifecycleTests
             PublishedAtUtc = status == JobStatus.Published ? Now.AddDays(-1) : null
         };
         var repository = new JobRepositoryFake { Job = job };
+        var audit = new AuditWriterTestDouble();
         var service = new JobService(
             repository,
             new UnitOfWorkFake(),
+            audit,
             new CreateJobRequestValidator(),
             new UpdateJobRequestValidator(),
             new JobSearchQueryValidator(),
             new FixedTimeProvider(Now));
-        return new(service, repository, job);
+        return new(service, repository, job, audit);
     }
 
     private static UpdateJobRequest Request(Job job, DateTime? expiresAtUtc) => new(
@@ -214,7 +220,8 @@ public sealed class AdminJobLifecycleTests
     private sealed record Fixture(
         JobService Service,
         JobRepositoryFake Repository,
-        Job Job);
+        Job Job,
+        AuditWriterTestDouble Audit);
 
     private sealed class JobRepositoryFake : IJobRepository
     {

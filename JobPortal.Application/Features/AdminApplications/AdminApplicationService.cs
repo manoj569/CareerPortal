@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FluentValidation;
 using JobPortal.Application.Abstractions.AdminApplications;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Persistence;
@@ -19,6 +20,7 @@ public sealed class AdminApplicationService(
     IResumeStorage resumeStorage,
     IEmailService emailService,
     IUnitOfWork unitOfWork,
+    IAuditWriter auditWriter,
     IValidator<AdminApplicationQuery> queryValidator,
     IValidator<UpdateAdminApplicationStatusRequest> updateValidator,
     TimeProvider timeProvider) : IAdminApplicationService
@@ -82,6 +84,16 @@ public sealed class AdminApplicationService(
             ChangedAtUtc = UtcNow,
             InternalNote = TextNormalizer.TrimOrNull(request.InternalNote)
         });
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "JobApplication",
+            application.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["previousStatus"] = previousStatus.ToString(),
+                ["newStatus"] = request.Status.ToString()
+            },
+            new(administratorUserId, "Administrator")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         if (request.Status is JobApplicationStatus.Shortlisted or JobApplicationStatus.Rejected)

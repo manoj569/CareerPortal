@@ -29,12 +29,14 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        EnsureAuditLogsAreAppendOnly();
         ApplyAuditAndSoftDelete();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
     public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        EnsureAuditLogsAreAppendOnly();
         ApplyAuditAndSoftDelete();
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
     }
@@ -67,5 +69,13 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
                 entry.Entity.UpdatedAtUtc = utcNow;
             }
         }
+    }
+
+    private void EnsureAuditLogsAreAppendOnly()
+    {
+        if (ChangeTracker.Entries<AuditLog>().Any(entry =>
+                entry.State is EntityState.Modified or EntityState.Deleted))
+            throw new InvalidOperationException(
+                "Audit logs are append-only and cannot be updated or deleted.");
     }
 }

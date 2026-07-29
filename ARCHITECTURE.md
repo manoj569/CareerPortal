@@ -144,6 +144,30 @@ list applications to obtain an identifier, open its detail, optionally download 
 send `{"status":"Reviewed","internalNote":"Reviewed in Swagger"}` to the status endpoint.
 Follow with `Shortlisted` or `Rejected`; final and withdrawn applications must return a conflict.
 
+## Append-only audit logging
+
+Successful sensitive mutations in Administrator management, Candidate profile/resume/saved-job/
+application flows, and Razorpay payment/membership flows append an audit row in the same unit of
+work as the business state change. Each new event records the actor identifier and role, action,
+entity type and identifier, UTC occurrence time, and the request correlation identifier.
+Metadata is deliberately allow-listed and bounded; credentials, tokens, payment signatures,
+provider identifiers, request bodies, resume data and paths, internal review notes, and profile
+content are never included.
+
+`GET /api/admin/audit-logs` requires the exact `Administrator` role and supports combined actor,
+action, entity type, entity identifier, UTC date-range, and correlation-ID filters with pagination
+capped at 100 rows. It returns a safe DTO and has no update or delete companion route. The audit
+repository likewise exposes only append and search operations. EF change tracking rejects audit
+updates/deletes, while migration `AddSecureAppendOnlyAuditLogging` adds a SQL Server
+`INSTEAD OF UPDATE, DELETE` trigger as a database-level backstop. Existing rows are not altered or
+backfilled, so no historical actions are invented.
+
+Applications should propagate a non-sensitive `X-Correlation-ID` (letters, digits, `.`, `_`, and
+`-`, at most 64 characters); otherwise the server trace identifier is used. Database principals
+used by the API should not have permission to disable the trigger. For stronger production
+tamper-evidence and long-term retention, stream audit records to access-controlled immutable/WORM
+storage or a security information and event management system.
+
 ## Transactional email
 
 Email verification and password reset use direct SMTP delivery after token state has been

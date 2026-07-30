@@ -24,6 +24,28 @@ public sealed class CandidateController(ICandidateService candidates) : Controll
         Ok(new ApiResponse<CandidateProfileResponse>(
             await candidates.UpdateProfileAsync(User.GetRequiredUserId(), request, cancellationToken)));
 
+    [HttpGet("onboarding")]
+    [ProducesResponseType(
+        typeof(ApiResponse<CandidateOnboardingResponse>),
+        StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<CandidateOnboardingResponse>>> Onboarding(
+        CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<CandidateOnboardingResponse>(
+            await candidates.GetOnboardingAsync(
+                User.GetRequiredUserId(), cancellationToken)));
+
+    [HttpPut("onboarding")]
+    [ProducesResponseType(
+        typeof(ApiResponse<CandidateOnboardingResponse>),
+        StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<CandidateOnboardingResponse>>> UpdateOnboarding(
+        UpdateCandidateOnboardingRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<CandidateOnboardingResponse>(
+            await candidates.UpdateOnboardingAsync(
+                User.GetRequiredUserId(), request, cancellationToken),
+            "Candidate onboarding saved successfully."));
+
     [HttpPut("resume")]
     [Consumes("multipart/form-data")]
     [RequestSizeLimit(6 * 1024 * 1024)]

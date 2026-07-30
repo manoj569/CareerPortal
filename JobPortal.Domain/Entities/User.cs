@@ -11,6 +11,8 @@ public sealed class User : BaseEntity
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
     public string? PhoneNumber { get; set; }
+    public string? NormalizedPhoneNumber { get; set; }
+    public DateTime? TermsAndPrivacyAcceptedAtUtc { get; set; }
     public string? ProfileImageUrl { get; set; }
     public string? Headline { get; set; }
     public string? Bio { get; set; }
@@ -21,6 +23,14 @@ public sealed class User : BaseEntity
     public string EducationJson { get; set; } = "[]";
     public string ExperienceJson { get; set; } = "[]";
     public string PreferredJobTypesJson { get; set; } = "[]";
+    public CareerStage? CareerStage { get; set; }
+    public string DesiredOpportunitiesJson { get; set; } = "[]";
+    public string WorkPreferencesJson { get; set; } = "[]";
+    public string? College { get; set; }
+    public string? Degree { get; set; }
+    public int? GraduationYear { get; set; }
+    public decimal? YearsOfExperience { get; set; }
+    public DateTime? OnboardingCompletedAtUtc { get; set; }
     public string? ResumeStorageKey { get; set; }
     public string? ResumeFileName { get; set; }
     public string? ResumeContentType { get; set; }

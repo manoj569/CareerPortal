@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using JobPortal.Domain.Enums;
 using JobPortal.Shared.Models;
 
@@ -12,6 +13,30 @@ public sealed record UpdateCandidateProfileRequest(
     string? Headline, string? Bio, string? Location, IReadOnlyCollection<string> Skills,
     IReadOnlyCollection<string> Education, IReadOnlyCollection<string> Experience,
     string? LinkedInUrl, string? PortfolioUrl, IReadOnlyCollection<EmploymentType> PreferredJobTypes);
+
+public sealed record CandidateOnboardingResponse(
+    CareerStage? CareerStage,
+    IReadOnlyCollection<DesiredOpportunity> DesiredOpportunities,
+    string? City,
+    IReadOnlyCollection<string> Skills,
+    IReadOnlyCollection<WorkPreference> WorkPreferences,
+    string? College,
+    string? Degree,
+    int? GraduationYear,
+    decimal? YearsOfExperience,
+    DateTime? CompletedAtUtc);
+
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record UpdateCandidateOnboardingRequest(
+    CareerStage CareerStage,
+    IReadOnlyCollection<DesiredOpportunity> DesiredOpportunities,
+    string City,
+    IReadOnlyCollection<string> Skills,
+    IReadOnlyCollection<WorkPreference> WorkPreferences,
+    string? College,
+    string? Degree,
+    int? GraduationYear,
+    decimal? YearsOfExperience);
 public sealed record ResumeUpload(Stream Content, long Length, string FileName, string ContentType);
 public sealed record ResumeResponse(string FileName, string ContentType, long SizeBytes, DateTime UploadedAtUtc);
 public sealed record ResumeDownload(Stream Content, string FileName, string ContentType);

@@ -29,6 +29,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.FirstName).HasMaxLength(100).IsRequired();
         builder.Property(x => x.LastName).HasMaxLength(100).IsRequired();
         builder.Property(x => x.PhoneNumber).HasMaxLength(32);
+        builder.Property(x => x.NormalizedPhoneNumber).HasMaxLength(13);
         builder.Property(x => x.ProfileImageUrl).HasMaxLength(2048);
         builder.Property(x => x.Headline).HasMaxLength(250);
         builder.Property(x => x.Bio).HasMaxLength(4000);
@@ -39,12 +40,19 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.EducationJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
         builder.Property(x => x.ExperienceJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
         builder.Property(x => x.PreferredJobTypesJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.DesiredOpportunitiesJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.WorkPreferencesJson).HasColumnType("nvarchar(max)").HasDefaultValue("[]").IsRequired();
+        builder.Property(x => x.College).HasMaxLength(200);
+        builder.Property(x => x.Degree).HasMaxLength(200);
+        builder.Property(x => x.YearsOfExperience).HasPrecision(4, 1);
         builder.Property(x => x.ResumeStorageKey).HasMaxLength(255);
         builder.Property(x => x.ResumeFileName).HasMaxLength(255);
         builder.Property(x => x.ResumeContentType).HasMaxLength(100);
         builder.Property(x => x.PasswordResetTokenHash).HasMaxLength(64);
         builder.Property(x => x.EmailVerificationTokenHash).HasMaxLength(64);
         builder.HasIndex(x => x.NormalizedEmail).IsUnique().HasFilter("[IsDeleted] = 0");
+        builder.HasIndex(x => x.NormalizedPhoneNumber).IsUnique()
+            .HasFilter("[NormalizedPhoneNumber] IS NOT NULL AND [IsDeleted] = 0");
         builder.HasIndex(x => new { x.Status, x.IsDeleted });
         builder.HasIndex(x => x.CreatedAtUtc);
         builder.HasOne(x => x.Role).WithMany(x => x.Users).HasForeignKey(x => x.RoleId).OnDelete(DeleteBehavior.Restrict);

@@ -1,4 +1,5 @@
 using FluentValidation;
+using JobPortal.Application.Common.Text;
 
 namespace JobPortal.Application.Features.Authentication;
 
@@ -7,14 +8,51 @@ public sealed class RegisterRequestValidator : AbstractValidator<RegisterRequest
     public RegisterRequestValidator()
     {
         RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
+        RuleFor(x => x.FirstName).NotEmpty().MinimumLength(2).MaximumLength(100)
+            .Must(BeSafeName).WithMessage("FirstName contains invalid characters.");
+        RuleFor(x => x.LastName).NotEmpty().MinimumLength(2).MaximumLength(100)
+            .Must(BeSafeName).WithMessage("LastName contains invalid characters.");
+        RuleFor(x => x.PhoneNumber).NotEmpty().MaximumLength(32)
+            .Must(value => IndianMobileNumber.TryNormalize(value, out _))
+            .WithMessage("PhoneNumber must be a valid Indian mobile number.");
+        RuleFor(x => x.HasAcceptedTermsAndPrivacy).Equal(true)
+            .WithMessage("Terms and Privacy consent is required.");
         RuleFor(x => x.Password).NotEmpty().MinimumLength(12).MaximumLength(128)
             .Matches("[A-Z]").WithMessage("Password must contain an uppercase letter.")
             .Matches("[a-z]").WithMessage("Password must contain a lowercase letter.")
             .Matches("[0-9]").WithMessage("Password must contain a number.")
-            .Matches("[^a-zA-Z0-9]").WithMessage("Password must contain a special character.");
-        RuleFor(x => x.FirstName).NotEmpty().MaximumLength(100);
-        RuleFor(x => x.LastName).NotEmpty().MaximumLength(100);
-        RuleFor(x => x.PhoneNumber).MaximumLength(32).When(x => x.PhoneNumber is not null);
+            .Matches("[^a-zA-Z0-9]").WithMessage("Password must contain a special character.")
+            .Must((request, password) => DoesNotContainPersonalData(request, password))
+            .WithMessage("Password must not contain your name, email name, or mobile number.");
+    }
+
+    private static bool BeSafeName(string value)
+    {
+        var trimmed = value.Trim();
+        return trimmed.Length > 0 &&
+            !trimmed.Any(char.IsControl) &&
+            trimmed.Any(char.IsLetter);
+    }
+
+    private static bool DoesNotContainPersonalData(
+        RegisterRequest request, string password)
+    {
+        if (string.IsNullOrEmpty(password))
+            return true;
+        var emailLocalPart = request.Email.Trim().Split('@', 2)[0];
+        _ = IndianMobileNumber.TryNormalize(request.PhoneNumber, out var mobile);
+        var values = new[]
+        {
+            emailLocalPart,
+            request.FirstName.Trim(),
+            request.LastName.Trim(),
+            mobile,
+            mobile.TrimStart('+'),
+            mobile.Length == 13 ? mobile[3..] : string.Empty
+        };
+        return values
+            .Where(value => value.Length > 0)
+            .All(value => !password.Contains(value, StringComparison.OrdinalIgnoreCase));
     }
 }
 

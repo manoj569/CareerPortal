@@ -1,4 +1,5 @@
 using FluentValidation;
+using JobPortal.Domain.Enums;
 
 namespace JobPortal.Application.Features.Candidates;
 
@@ -24,6 +25,90 @@ public sealed class UpdateCandidateProfileRequestValidator : AbstractValidator<U
     private static bool OptionalUrl(string? value) =>
         string.IsNullOrWhiteSpace(value) ||
         (Uri.TryCreate(value, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https");
+}
+
+public sealed class UpdateCandidateOnboardingRequestValidator :
+    AbstractValidator<UpdateCandidateOnboardingRequest>
+{
+    public UpdateCandidateOnboardingRequestValidator(TimeProvider timeProvider)
+    {
+        var currentYear = timeProvider.GetUtcNow().Year;
+
+        RuleFor(x => x.CareerStage).IsInEnum();
+        RuleFor(x => x.DesiredOpportunities)
+            .Cascade(CascadeMode.Stop)
+            .NotNull()
+            .Must(values => values.Count is >= 1 and <= 3)
+            .WithMessage("DesiredOpportunities must contain between 1 and 3 values.")
+            .Must(BeUnique)
+            .WithMessage("DesiredOpportunities must not contain duplicates.");
+        RuleForEach(x => x.DesiredOpportunities).IsInEnum();
+        RuleFor(x => x.City)
+            .Cascade(CascadeMode.Stop)
+            .NotEmpty()
+            .MaximumLength(150)
+            .Must(BeSafeText)
+            .WithMessage("City contains invalid characters.");
+        RuleFor(x => x.Skills)
+            .Cascade(CascadeMode.Stop)
+            .NotNull()
+            .Must(values => values.Count is >= 1 and <= 20)
+            .WithMessage("Skills must contain between 1 and 20 values.")
+            .Must(BeUniqueTrimmedStrings)
+            .WithMessage("Skills must be unique and non-empty.");
+        RuleForEach(x => x.Skills)
+            .Cascade(CascadeMode.Stop)
+            .NotEmpty()
+            .MaximumLength(100)
+            .Must(BeSafeText)
+            .WithMessage("Skills contain invalid characters.");
+        RuleFor(x => x.WorkPreferences)
+            .Cascade(CascadeMode.Stop)
+            .NotNull()
+            .Must(values => values.Count <= 3)
+            .WithMessage("WorkPreferences cannot contain more than 3 values.")
+            .Must(BeUnique)
+            .WithMessage("WorkPreferences must not contain duplicates.");
+        RuleForEach(x => x.WorkPreferences).IsInEnum();
+        RuleFor(x => x.College)
+            .MaximumLength(200)
+            .Must(BeOptionalSafeText)
+            .WithMessage("College contains invalid characters.");
+        RuleFor(x => x.Degree)
+            .MaximumLength(200)
+            .Must(BeOptionalSafeText)
+            .WithMessage("Degree contains invalid characters.");
+        RuleFor(x => x.GraduationYear)
+            .InclusiveBetween(currentYear - 80, currentYear + 10)
+            .When(x => x.GraduationYear.HasValue);
+        RuleFor(x => x.YearsOfExperience)
+            .InclusiveBetween(0, 50)
+            .When(x => x.YearsOfExperience.HasValue);
+        RuleFor(x => x.YearsOfExperience)
+            .NotNull()
+            .When(x => x.CareerStage == CareerStage.Experienced)
+            .WithMessage("YearsOfExperience is required for Experienced candidates.");
+    }
+
+    private static bool BeSafeText(string? value) =>
+        !string.IsNullOrWhiteSpace(value) && !value.Any(char.IsControl);
+
+    private static bool BeOptionalSafeText(string? value) =>
+        string.IsNullOrWhiteSpace(value) || !value.Any(char.IsControl);
+
+    private static bool BeUnique<T>(IReadOnlyCollection<T> values)
+        where T : struct, Enum =>
+        values.Distinct().Count() == values.Count;
+
+    private static bool BeUniqueTrimmedStrings(IReadOnlyCollection<string> values)
+    {
+        var normalized = values
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value.Trim())
+            .ToArray();
+        return normalized.Length == values.Count &&
+            normalized.Distinct(StringComparer.OrdinalIgnoreCase).Count() == values.Count;
+    }
 }
 
 public sealed class CandidatePageQueryValidator : AbstractValidator<CandidatePageQuery>

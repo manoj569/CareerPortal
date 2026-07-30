@@ -4,6 +4,7 @@ using FluentValidation;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
+using JobPortal.Application.Common.Text;
 using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
@@ -37,10 +38,19 @@ public sealed class AuthService(
 
     public async Task<RegistrationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
+        request = request with
+        {
+            Email = request.Email?.Trim() ?? string.Empty,
+            FirstName = request.FirstName?.Trim() ?? string.Empty,
+            LastName = request.LastName?.Trim() ?? string.Empty
+        };
         await registerValidator.ValidateAndThrowAsync(request, cancellationToken);
         var normalizedEmail = NormalizeEmail(request.Email);
+        _ = IndianMobileNumber.TryNormalize(
+            request.PhoneNumber, out var normalizedPhoneNumber);
 
-        if (await users.GetByNormalizedEmailAsync(normalizedEmail, cancellationToken) is not null)
+        if (await users.RegistrationIdentityExistsAsync(
+                normalizedEmail, normalizedPhoneNumber, cancellationToken))
         {
             return new RegistrationResponse(VerificationRequiredMessage);
         }
@@ -53,7 +63,9 @@ public sealed class AuthService(
             PasswordHash = passwordHasher.Hash(request.Password),
             FirstName = request.FirstName.Trim(),
             LastName = request.LastName.Trim(),
-            PhoneNumber = string.IsNullOrWhiteSpace(request.PhoneNumber) ? null : request.PhoneNumber.Trim(),
+            PhoneNumber = normalizedPhoneNumber,
+            NormalizedPhoneNumber = normalizedPhoneNumber,
+            TermsAndPrivacyAcceptedAtUtc = UtcNow,
             Status = UserStatus.Pending,
             EmailConfirmed = false,
             EmailVerificationTokenHash = HashToken(token),
@@ -64,7 +76,14 @@ public sealed class AuthService(
         };
 
         await users.AddAsync(user, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (UniqueConstraintException)
+        {
+            return new RegistrationResponse(VerificationRequiredMessage);
+        }
         _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
         return new RegistrationResponse(VerificationRequiredMessage);
     }

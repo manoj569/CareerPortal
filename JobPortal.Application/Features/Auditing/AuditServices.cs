@@ -96,6 +96,8 @@ internal static class AuditMetadataPolicy
         {
             "amount",
             "categoryId",
+            "changedFields",
+            "completed",
             "companyId",
             "currency",
             "fileType",

@@ -19,6 +19,7 @@ public sealed class CandidateService(
     IUnitOfWork unitOfWork,
     IAuditWriter auditWriter,
     IValidator<UpdateCandidateProfileRequest> profileValidator,
+    IValidator<UpdateCandidateOnboardingRequest> onboardingValidator,
     IValidator<CandidatePageQuery> pageValidator,
     IValidator<JobApplicationQuery> applicationQueryValidator,
     IValidator<CreateJobApplicationRequest> applicationValidator,
@@ -49,6 +50,10 @@ public sealed class CandidateService(
         user.EducationJson = SerializeStrings(request.Education);
         user.ExperienceJson = SerializeStrings(request.Experience);
         user.PreferredJobTypesJson = JsonSerializer.Serialize(request.PreferredJobTypes.Distinct());
+        if (user.OnboardingCompletedAtUtc.HasValue &&
+            (string.IsNullOrWhiteSpace(user.Location) ||
+             request.Skills.Count == 0))
+            user.OnboardingCompletedAtUtc = null;
         await auditWriter.AppendAsync(new(
             AuditAction.Update,
             "CandidateProfile",
@@ -56,6 +61,45 @@ public sealed class CandidateService(
             Actor: new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return MapProfile(user);
+    }
+
+    public async Task<CandidateOnboardingResponse> GetOnboardingAsync(
+        Guid userId, CancellationToken cancellationToken = default) =>
+        MapOnboarding(await RequiredCandidateAsync(userId, cancellationToken));
+
+    public async Task<CandidateOnboardingResponse> UpdateOnboardingAsync(
+        Guid userId,
+        UpdateCandidateOnboardingRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await onboardingValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var user = await RequiredCandidateAsync(userId, cancellationToken);
+        user.CareerStage = request.CareerStage;
+        user.DesiredOpportunitiesJson = JsonSerializer.Serialize(
+            request.DesiredOpportunities.Distinct());
+        user.Location = request.City.Trim();
+        user.SkillsJson = SerializeStrings(request.Skills);
+        user.WorkPreferencesJson = JsonSerializer.Serialize(
+            request.WorkPreferences.Distinct());
+        user.College = TextNormalizer.TrimOrNull(request.College);
+        user.Degree = TextNormalizer.TrimOrNull(request.Degree);
+        user.GraduationYear = request.GraduationYear;
+        user.YearsOfExperience = request.YearsOfExperience;
+        user.OnboardingCompletedAtUtc ??= UtcNow;
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "CandidateOnboarding",
+            user.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["changedFields"] =
+                    "careerStage,desiredOpportunities,city,skills,workPreferences," +
+                    "college,degree,graduationYear,yearsOfExperience",
+                ["completed"] = bool.TrueString
+            },
+            new(userId, "Candidate")), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return MapOnboarding(user);
     }
 
     public async Task<ResumeResponse> UploadResumeAsync(
@@ -313,6 +357,17 @@ public sealed class CandidateService(
         Deserialize<string>(user.SkillsJson), Deserialize<string>(user.EducationJson),
         Deserialize<string>(user.ExperienceJson), user.LinkedInUrl, user.PortfolioUrl,
         Deserialize<EmploymentType>(user.PreferredJobTypesJson), MapResume(user));
+    private static CandidateOnboardingResponse MapOnboarding(User user) => new(
+        user.CareerStage,
+        Deserialize<DesiredOpportunity>(user.DesiredOpportunitiesJson),
+        user.Location,
+        Deserialize<string>(user.SkillsJson),
+        Deserialize<WorkPreference>(user.WorkPreferencesJson),
+        user.College,
+        user.Degree,
+        user.GraduationYear,
+        user.YearsOfExperience,
+        user.OnboardingCompletedAtUtc);
     private static ResumeResponse? MapResume(User user) =>
         user.ResumeFileName is not null && user.ResumeContentType is not null &&
         user.ResumeSizeBytes.HasValue && user.ResumeUploadedAtUtc.HasValue

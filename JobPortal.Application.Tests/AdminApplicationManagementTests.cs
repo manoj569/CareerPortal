@@ -364,6 +364,11 @@ public sealed class AdminApplicationManagementTests
             string normalizedEmail, CancellationToken cancellationToken = default) =>
             Task.FromResult<User?>(null);
 
+        public Task<bool> RegistrationIdentityExistsAsync(
+            string normalizedEmail, string normalizedPhoneNumber,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
+
         public Task<User?> GetByIdWithRoleAsync(
             Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult(User?.Id == userId ? User : null);

@@ -33,7 +33,14 @@ public sealed class AdminBootstrapService(
         try
         {
             await registerValidator.ValidateAndThrowAsync(
-                new RegisterRequest(email, password, firstName, lastName, null), cancellationToken);
+                new RegisterRequest(
+                    email,
+                    password,
+                    firstName,
+                    lastName,
+                    "+919876543210",
+                    true),
+                cancellationToken);
         }
         catch (ValidationException exception)
         {

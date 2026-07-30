@@ -42,6 +42,7 @@ public sealed class GlobalExceptionMiddleware(
                     .ToDictionary(x => x.Key, x => x.Select(e => e.ErrorMessage).ToArray()))),
                 BadHttpRequestException => (StatusCodes.Status400BadRequest, new ApiError("invalid_request", "The request is invalid.")),
                 DbUpdateConcurrencyException => (StatusCodes.Status409Conflict, new ApiError("concurrency_conflict", "The resource was modified by another request.")),
+                UniqueConstraintException => (StatusCodes.Status409Conflict, new ApiError("data_conflict", "A resource with the same unique value already exists.")),
                 DbUpdateException { InnerException: SqlException { Number: 2601 or 2627 } } =>
                     (StatusCodes.Status409Conflict, new ApiError("data_conflict", "A resource with the same unique value already exists.")),
                 _ => (StatusCodes.Status500InternalServerError, ApiError.InternalServerError())

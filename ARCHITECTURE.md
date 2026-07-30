@@ -69,7 +69,18 @@ Candidate endpoints require the `Candidate` role and re-check that the current a
 email-verified and Active. Every profile, resume, saved-job, and application query is scoped by
 the authenticated user's identifier; client-supplied candidate identifiers are never accepted.
 
+Public Candidate registration accepts only first/last name, email, password, Indian mobile number,
+and explicit Terms/Privacy consent. Email is trimmed and normalized for case-insensitive lookup.
+Accepted mobile forms are canonicalized to `+91XXXXXXXXXX`, with a separate normalized value used
+by a filtered unique database index. The existing normalized-email unique index remains
+authoritative. Pre-existing or concurrent email/mobile conflicts return the same generic
+registration response and never trigger token delivery. Public clients cannot select a role or
+set account, verification, membership, payment, or audit state.
+During migration, recognizable legacy numbers are canonicalized deterministically; duplicate or
+malformed legacy phone values are cleared without changing account role, status, or login access.
+
 - `GET|PUT /api/candidate/profile`
+- `GET|PUT /api/candidate/onboarding`
 - `PUT|GET|DELETE /api/candidate/resume`
 - `GET /api/candidate/saved-jobs`
 - `PUT|DELETE /api/candidate/saved-jobs/{jobId}`
@@ -89,6 +100,13 @@ when a candidate replaces or removes the current resume.
 Applications require an active portal-wide membership and an available published, visible,
 unexpired job. A unique database index prevents any duplicate application for a candidate/job
 pair. Candidates can withdraw only applications still in `Submitted` status.
+
+Candidate onboarding supports Student, Fresher, and Experienced career stages; multiple desired
+opportunities and work preferences; city, skills, education summary fields, graduation year, and
+years of experience. Submission is optional for existing Candidates and does not gate login, job
+viewing, saved jobs, or application access. A valid submission records its UTC completion time.
+Audit rows contain only the names of changed onboarding fields and completion state, never the
+submitted values, email, mobile number, password, token, or resume data.
 
 ## Administrator job lifecycle
 

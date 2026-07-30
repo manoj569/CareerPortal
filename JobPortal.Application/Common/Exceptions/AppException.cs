@@ -11,3 +11,7 @@ public sealed class UnauthorizedException(string message = "Authentication faile
 public sealed class EmailNotVerifiedException() : AppException("Email verification is required.", 403, "email_not_verified");
 public sealed class NotFoundException(string message) : AppException(message, 404, "not_found");
 public sealed class ConflictException(string message) : AppException(message, 409, "conflict");
+
+public sealed class UniqueConstraintException(
+    string message,
+    Exception? innerException = null) : Exception(message, innerException);

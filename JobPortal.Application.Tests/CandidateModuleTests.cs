@@ -13,6 +13,11 @@ namespace JobPortal.Application.Tests;
 
 public sealed class CandidateModuleTests
 {
+    private static readonly DateTime Now =
+        new(2026, 7, 30, 10, 0, 0, DateTimeKind.Utc);
+    private static readonly JsonSerializerOptions WebJson =
+        new(JsonSerializerDefaults.Web);
+
     [Fact]
     public async Task ProfileRequiresOwnedActiveVerifiedCandidate()
     {
@@ -21,6 +26,116 @@ public sealed class CandidateModuleTests
 
         await Assert.ThrowsAsync<UnauthorizedException>(
             () => fixture.Service.GetProfileAsync(Guid.NewGuid()));
+    }
+
+    [Theory]
+    [InlineData(CareerStage.Student, DesiredOpportunity.Internship, null)]
+    [InlineData(CareerStage.Fresher, DesiredOpportunity.FresherJob, null)]
+    [InlineData(CareerStage.Experienced, DesiredOpportunity.ExperiencedJob, 4.5)]
+    public async Task OnboardingSupportsEveryCareerStage(
+        CareerStage careerStage,
+        DesiredOpportunity desiredOpportunity,
+        double? yearsOfExperience)
+    {
+        var fixture = CreateFixture();
+        var request = new UpdateCandidateOnboardingRequest(
+            careerStage,
+            [desiredOpportunity],
+            "  Pune  ",
+            [" C# ", "SQL"],
+            [WorkPreference.Remote, WorkPreference.Hybrid],
+            careerStage == CareerStage.Experienced ? null : "Example Institute",
+            careerStage == CareerStage.Experienced ? null : "B.Tech",
+            careerStage == CareerStage.Experienced ? null : 2026,
+            yearsOfExperience.HasValue ? (decimal)yearsOfExperience.Value : null);
+
+        var response = await fixture.Service.UpdateOnboardingAsync(
+            fixture.Candidate.Id, request);
+
+        Assert.Equal(careerStage, response.CareerStage);
+        Assert.Equal("Pune", response.City);
+        Assert.Equal(["C#", "SQL"], response.Skills);
+        Assert.Equal(Now, response.CompletedAtUtc);
+        Assert.Equal(yearsOfExperience, (double?)response.YearsOfExperience);
+        var audit = Assert.Single(fixture.Audit.Events);
+        var auditJson = JsonSerializer.Serialize(audit);
+        Assert.Equal("CandidateOnboarding", audit.EntityType);
+        Assert.DoesNotContain("Pune", auditJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("C#", auditJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("Institute", auditJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            fixture.Candidate.Email, auditJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task OnboardingRejectsInvalidListsEnumsYearsAndOversizedSkills()
+    {
+        var validator = new UpdateCandidateOnboardingRequestValidator(
+            new FixedTimeProvider(Now));
+        var invalidRequests = new[]
+        {
+            ValidOnboarding() with { DesiredOpportunities = [] },
+            ValidOnboarding() with
+            {
+                DesiredOpportunities =
+                [
+                    DesiredOpportunity.Internship,
+                    DesiredOpportunity.Internship
+                ]
+            },
+            ValidOnboarding() with { Skills = ["C#", " c# "] },
+            ValidOnboarding() with { Skills = [""] },
+            ValidOnboarding() with
+            {
+                Skills = Enumerable.Range(1, 21).Select(index => $"Skill {index}").ToArray()
+            },
+            ValidOnboarding() with { CareerStage = (CareerStage)99 },
+            ValidOnboarding() with { WorkPreferences = [(WorkPreference)99] },
+            ValidOnboarding() with { GraduationYear = Now.Year + 11 },
+            ValidOnboarding() with
+            {
+                CareerStage = CareerStage.Experienced,
+                YearsOfExperience = null
+            },
+            ValidOnboarding() with { YearsOfExperience = 51 }
+        };
+
+        foreach (var request in invalidRequests)
+            Assert.False((await validator.ValidateAsync(request)).IsValid);
+    }
+
+    [Fact]
+    public async Task OnboardingIsOwnerScopedAndRejectsAdministratorAccounts()
+    {
+        var fixture = CreateFixture();
+        await Assert.ThrowsAsync<UnauthorizedException>(() =>
+            fixture.Service.GetOnboardingAsync(Guid.NewGuid()));
+
+        fixture.Candidate.RoleId = SystemRoleIds.Administrator;
+        await Assert.ThrowsAsync<UnauthorizedException>(() =>
+            fixture.Service.UpdateOnboardingAsync(
+                fixture.Candidate.Id, ValidOnboarding()));
+    }
+
+    [Fact]
+    public void OnboardingContractRejectsInternalOverPosting()
+    {
+        var json =
+            """
+            {
+              "careerStage":1,
+              "desiredOpportunities":[1],
+              "city":"Pune",
+              "skills":["C#"],
+              "workPreferences":[1],
+              "userId":"00000000-0000-0000-0000-000000000001",
+              "role":"Administrator"
+            }
+            """;
+
+        Assert.Throws<JsonException>(() =>
+            JsonSerializer.Deserialize<UpdateCandidateOnboardingRequest>(
+                json, WebJson));
     }
 
     [Fact]
@@ -189,11 +304,14 @@ public sealed class CandidateModuleTests
         var storage = new FakeResumeStorage();
         var unitOfWork = new FakeUnitOfWork();
         var audit = new AuditWriterTestDouble();
+        var timeProvider = new FixedTimeProvider(Now);
         var service = new CandidateService(
             repository, dashboard, storage, unitOfWork, audit,
-            new UpdateCandidateProfileRequestValidator(), new CandidatePageQueryValidator(),
+            new UpdateCandidateProfileRequestValidator(),
+            new UpdateCandidateOnboardingRequestValidator(timeProvider),
+            new CandidatePageQueryValidator(),
             new JobApplicationQueryValidator(), new CreateJobApplicationRequestValidator(),
-            TimeProvider.System);
+            timeProvider);
         return new(service, repository, dashboard, storage, unitOfWork, audit, candidate, job);
     }
 
@@ -230,7 +348,13 @@ public sealed class CandidateModuleTests
         public JobApplicationQuery? LastQuery { get; private set; }
 
         public Task<User?> GetCandidateAsync(Guid userId, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Candidate?.Id == userId ? Candidate : null);
+            Task.FromResult(
+                Candidate?.Id == userId &&
+                Candidate.RoleId == SystemRoleIds.Candidate &&
+                Candidate.EmailConfirmed &&
+                Candidate.Status == UserStatus.Active
+                    ? Candidate
+                    : null);
         public Task<CandidateJob?> GetAvailableJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
             Task.FromResult(AvailableJob?.Id == jobId ? AvailableJob : null);
         public Task<bool> HasActiveMembershipAsync(Guid userId, CancellationToken cancellationToken = default) =>
@@ -327,5 +451,22 @@ public sealed class CandidateModuleTests
             SaveCount++;
             return Task.FromResult(1);
         }
+    }
+
+    private static UpdateCandidateOnboardingRequest ValidOnboarding() =>
+        new(
+            CareerStage.Student,
+            [DesiredOpportunity.Internship],
+            "Pune",
+            ["C#"],
+            [WorkPreference.Remote],
+            "Example Institute",
+            "B.Tech",
+            Now.Year,
+            null);
+
+    private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => new(utcNow);
     }
 }

@@ -5,6 +5,10 @@ namespace JobPortal.Application.Abstractions.Persistence;
 public interface IUserRepository
 {
     Task<User?> GetByNormalizedEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default);
+    Task<bool> RegistrationIdentityExistsAsync(
+        string normalizedEmail,
+        string normalizedPhoneNumber,
+        CancellationToken cancellationToken = default);
     Task<User?> GetByIdWithRoleAsync(Guid userId, CancellationToken cancellationToken = default);
     Task AddAsync(User user, CancellationToken cancellationToken = default);
     void Update(User user);

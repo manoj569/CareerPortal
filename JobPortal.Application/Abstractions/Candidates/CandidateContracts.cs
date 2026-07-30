@@ -7,6 +7,8 @@ public interface ICandidateService
 {
     Task<CandidateProfileResponse> GetProfileAsync(Guid userId, CancellationToken cancellationToken = default);
     Task<CandidateProfileResponse> UpdateProfileAsync(Guid userId, UpdateCandidateProfileRequest request, CancellationToken cancellationToken = default);
+    Task<CandidateOnboardingResponse> GetOnboardingAsync(Guid userId, CancellationToken cancellationToken = default);
+    Task<CandidateOnboardingResponse> UpdateOnboardingAsync(Guid userId, UpdateCandidateOnboardingRequest request, CancellationToken cancellationToken = default);
     Task<ResumeResponse> UploadResumeAsync(Guid userId, ResumeUpload upload, CancellationToken cancellationToken = default);
     Task<ResumeDownload> DownloadResumeAsync(Guid userId, CancellationToken cancellationToken = default);
     Task DeleteResumeAsync(Guid userId, CancellationToken cancellationToken = default);

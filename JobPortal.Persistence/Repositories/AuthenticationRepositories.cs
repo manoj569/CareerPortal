@@ -1,4 +1,5 @@
 using JobPortal.Application.Abstractions.Persistence;
+using JobPortal.Application.Common.Exceptions;
 using JobPortal.Domain.Entities;
 using JobPortal.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +10,15 @@ public sealed class UserRepository(JobPortalDbContext context) : IUserRepository
 {
     public Task<User?> GetByNormalizedEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default) =>
         context.Users.Include(x => x.Role).SingleOrDefaultAsync(x => x.NormalizedEmail == normalizedEmail, cancellationToken);
+
+    public Task<bool> RegistrationIdentityExistsAsync(
+        string normalizedEmail,
+        string normalizedPhoneNumber,
+        CancellationToken cancellationToken = default) =>
+        context.Users.AnyAsync(
+            user => user.NormalizedEmail == normalizedEmail ||
+                user.NormalizedPhoneNumber == normalizedPhoneNumber,
+            cancellationToken);
 
     public Task<User?> GetByIdWithRoleAsync(Guid userId, CancellationToken cancellationToken = default) =>
         context.Users.Include(x => x.Role).SingleOrDefaultAsync(x => x.Id == userId, cancellationToken);
@@ -47,5 +57,18 @@ public sealed class RefreshTokenRepository(JobPortalDbContext context) : IRefres
 
 public sealed class UnitOfWork(JobPortalDbContext context) : IUnitOfWork
 {
-    public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => context.SaveChangesAsync(cancellationToken);
+    public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            return await context.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException exception)
+            when (exception.InnerException is Microsoft.Data.SqlClient.SqlException
+            { Number: 2601 or 2627 })
+        {
+            throw new UniqueConstraintException(
+                "A database uniqueness constraint was violated.", exception);
+        }
+    }
 }

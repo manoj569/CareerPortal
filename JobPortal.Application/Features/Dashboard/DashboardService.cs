@@ -37,7 +37,18 @@ public sealed class DashboardService(
         var user = await RequiredUserAsync(userId, cancellationToken);
         user.FirstName = request.FirstName.Trim();
         user.LastName = request.LastName.Trim();
-        user.PhoneNumber = TextNormalizer.TrimOrNull(request.PhoneNumber);
+        if (string.IsNullOrWhiteSpace(request.PhoneNumber))
+        {
+            user.PhoneNumber = null;
+            user.NormalizedPhoneNumber = null;
+        }
+        else
+        {
+            _ = IndianMobileNumber.TryNormalize(
+                request.PhoneNumber, out var normalizedPhoneNumber);
+            user.PhoneNumber = normalizedPhoneNumber;
+            user.NormalizedPhoneNumber = normalizedPhoneNumber;
+        }
         user.ProfileImageUrl = TextNormalizer.TrimOrNull(request.ProfileImageUrl);
         user.Headline = TextNormalizer.TrimOrNull(request.Headline);
         user.Bio = TextNormalizer.TrimOrNull(request.Bio);

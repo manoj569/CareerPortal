@@ -87,21 +87,45 @@ public sealed class PublicJobRepository(
 
     public async Task<IReadOnlyCollection<PopularCompanyResponse>> GetPopularCompaniesAsync(
         int limit, CancellationToken cancellationToken = default)
+        => await PopularCompaniesQuery(limit).ToArrayAsync(cancellationToken);
+
+    internal IQueryable<PopularCompanyResponse> PopularCompaniesQuery(int limit)
     {
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
-        return await context.Companies.AsNoTracking()
-            .Select(company => new PopularCompanyResponse(
-                company.Id, company.Name, company.Slug, company.LogoUrl,
-                company.Industry, company.Location, company.IsVerified,
-                company.Jobs.Count(job => job.Status == JobStatus.Published &&
-                    !job.IsHidden && !job.IsDeleted && job.PublishedAtUtc.HasValue &&
-                    job.ExpiresAtUtc.HasValue && job.ExpiresAtUtc > utcNow)))
+        var companies = context.Companies.AsNoTracking()
+            .Select(company => new
+            {
+                company.Id,
+                company.Name,
+                company.Slug,
+                company.LogoUrl,
+                company.Industry,
+                company.Location,
+                company.IsVerified,
+                ActiveJobCount = company.Jobs.Count(job =>
+                    job.Status == JobStatus.Published &&
+                    !job.IsHidden &&
+                    !job.IsDeleted &&
+                    job.PublishedAtUtc.HasValue &&
+                    job.ExpiresAtUtc.HasValue &&
+                    job.ExpiresAtUtc > utcNow)
+            });
+
+        return companies
             .Where(company => company.ActiveJobCount > 0)
             .OrderByDescending(company => company.ActiveJobCount)
             .ThenByDescending(company => company.IsVerified)
             .ThenBy(company => company.Name)
             .Take(limit)
-            .ToArrayAsync(cancellationToken);
+            .Select(company => new PopularCompanyResponse(
+                company.Id,
+                company.Name,
+                company.Slug,
+                company.LogoUrl,
+                company.Industry,
+                company.Location,
+                company.IsVerified,
+                company.ActiveJobCount));
     }
 
     private IQueryable<Job> AvailableJobs()

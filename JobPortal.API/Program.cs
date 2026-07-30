@@ -130,7 +130,7 @@ builder.Services.AddSwaggerGen(options =>
         Title = "Job Portal API",
         Version = "v1",
         Description =
-            "CareerPortal API including Administrator job lifecycle, application review, and append-only audit search endpoints."
+            "CareerPortal API including Candidate registration/onboarding and Administrator management endpoints."
     });
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {

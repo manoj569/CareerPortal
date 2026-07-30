@@ -216,6 +216,10 @@ public sealed class AdminBootstrapTests
         public User? Added { get; private set; }
         public int AddCount { get; private set; }
         public Task<User?> GetByNormalizedEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default) => Task.FromResult(Existing);
+        public Task<bool> RegistrationIdentityExistsAsync(
+            string normalizedEmail, string normalizedPhoneNumber,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(false);
         public Task<User?> GetByIdWithRoleAsync(Guid userId, CancellationToken cancellationToken = default) => Task.FromResult<User?>(null);
         public Task AddAsync(User user, CancellationToken cancellationToken = default) { Added = user; AddCount++; return Task.CompletedTask; }
         public void Update(User user) { }

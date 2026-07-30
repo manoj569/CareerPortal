@@ -1,6 +1,15 @@
+using System.Text.Json.Serialization;
+
 namespace JobPortal.Application.Features.Authentication;
 
-public sealed record RegisterRequest(string Email, string Password, string FirstName, string LastName, string? PhoneNumber);
+[JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
+public sealed record RegisterRequest(
+    string Email,
+    string Password,
+    string FirstName,
+    string LastName,
+    string PhoneNumber,
+    bool HasAcceptedTermsAndPrivacy);
 public sealed record RegistrationResponse(string Message);
 public sealed record LoginRequest(string Email, string Password);
 public sealed record VerifyEmailRequest(string Email, string Token);

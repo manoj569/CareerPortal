@@ -304,7 +304,7 @@ public sealed class CandidateService(
 
     private async Task<User> RequiredCandidateAsync(Guid userId, CancellationToken cancellationToken) =>
         await candidates.GetCandidateAsync(userId, cancellationToken)
-        ?? throw new UnauthorizedException("An active, verified Candidate account is required.");
+        ?? throw new UnauthorizedException("An active Candidate account is required.");
 
     private static async Task<(string Extension, MemoryStream Content)> ValidateResumeAsync(
         ResumeUpload upload, CancellationToken cancellationToken)

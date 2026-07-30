@@ -471,8 +471,8 @@ public sealed class PaymentService(
     {
         var user = await users.GetByIdWithRoleAsync(userId, cancellationToken);
         if (user is null || user.RoleId != SystemRoleIds.Candidate ||
-            !user.EmailConfirmed || user.Status != UserStatus.Active)
-            throw new UnauthorizedException("An active, verified Candidate account is required.");
+            user.Status != UserStatus.Active)
+            throw new UnauthorizedException("An active Candidate account is required.");
     }
 
     private static void EnsureProviderOrderMatches(Payment payment, string orderId)

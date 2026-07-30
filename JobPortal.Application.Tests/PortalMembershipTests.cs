@@ -105,7 +105,7 @@ public sealed class PortalMembershipTests
     }
 
     [Fact]
-    public async Task PurchaseRequiresVerifiedActiveCandidate()
+    public async Task PurchaseRequiresActiveCandidateRole()
     {
         var fixture = CreatePaymentFixture();
         fixture.Users.IsEligible = false;
@@ -113,6 +113,19 @@ public sealed class PortalMembershipTests
         await Assert.ThrowsAsync<UnauthorizedException>(
             () => fixture.Service.CreateOrderAsync(UserId, new()));
         Assert.Equal(0, fixture.Gateway.CreateOrderCalls);
+    }
+
+    [Fact]
+    public async Task ActiveCandidateMembershipAccessIgnoresHistoricalEmailFlag()
+    {
+        var fixture = CreatePaymentFixture();
+        fixture.Users.EmailConfirmed = false;
+
+        var order = await fixture.Service.CreateOrderAsync(UserId, new());
+        var status = await fixture.Service.GetStatusAsync(UserId);
+
+        Assert.Equal(9900, order.AmountInMinorUnits);
+        Assert.Equal(MembershipStatus.Pending, status.Membership!.Status);
     }
 
     [Fact]
@@ -396,6 +409,7 @@ public sealed class PortalMembershipTests
     private sealed class FakeUserRepository : IUserRepository
     {
         public bool IsEligible { get; set; } = true;
+        public bool EmailConfirmed { get; set; } = true;
         public Task<User?> GetByNormalizedEmailAsync(
             string normalizedEmail, CancellationToken cancellationToken = default) =>
             Task.FromResult<User?>(null);
@@ -410,7 +424,7 @@ public sealed class PortalMembershipTests
                 {
                     Id = id,
                     RoleId = SystemRoleIds.Candidate,
-                    EmailConfirmed = true,
+                    EmailConfirmed = EmailConfirmed,
                     Status = UserStatus.Active
                 }
                 : null);

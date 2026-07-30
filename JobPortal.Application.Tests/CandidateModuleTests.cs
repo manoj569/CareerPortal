@@ -19,13 +19,39 @@ public sealed class CandidateModuleTests
         new(JsonSerializerDefaults.Web);
 
     [Fact]
-    public async Task ProfileRequiresOwnedActiveVerifiedCandidate()
+    public async Task ProfileRequiresOwnedActiveCandidate()
     {
         var fixture = CreateFixture();
         fixture.Repository.Candidate = null;
 
         await Assert.ThrowsAsync<UnauthorizedException>(
             () => fixture.Service.GetProfileAsync(Guid.NewGuid()));
+    }
+
+    [Fact]
+    public async Task ActiveCandidateAccessDoesNotDependOnHistoricalEmailFlag()
+    {
+        var fixture = CreateFixture();
+        fixture.Candidate.EmailConfirmed = false;
+
+        var profile = await fixture.Service.GetProfileAsync(
+            fixture.Candidate.Id);
+        await fixture.Service.GetSavedJobsAsync(
+            fixture.Candidate.Id,
+            new());
+        await fixture.Service.SaveJobAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id);
+        var application = await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new(null));
+
+        Assert.Equal(fixture.Candidate.Id, profile.Id);
+        Assert.Single(fixture.Dashboard.Added);
+        Assert.Equal(
+            JobApplicationStatus.Submitted,
+            application.Status);
     }
 
     [Theory]
@@ -351,7 +377,6 @@ public sealed class CandidateModuleTests
             Task.FromResult(
                 Candidate?.Id == userId &&
                 Candidate.RoleId == SystemRoleIds.Candidate &&
-                Candidate.EmailConfirmed &&
                 Candidate.Status == UserStatus.Active
                     ? Candidate
                     : null);

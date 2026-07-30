@@ -8,8 +8,8 @@ public interface IAuthService
 {
     Task<RegistrationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
     Task<AuthenticationResponse> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default);
-    Task<VerificationResponse> VerifyEmailAsync(VerifyEmailRequest request, CancellationToken cancellationToken = default);
-    Task<VerificationResponse> ResendVerificationAsync(ResendVerificationRequest request, CancellationToken cancellationToken = default);
+    //Task<VerificationResponse> VerifyEmailAsync(VerifyEmailRequest request, CancellationToken cancellationToken = default);
+    //Task<VerificationResponse> ResendVerificationAsync(ResendVerificationRequest request, CancellationToken cancellationToken = default);
     Task<AuthenticationResponse> RefreshAsync(RefreshTokenRequest request, string? ipAddress, CancellationToken cancellationToken = default);
     Task ForgotPasswordAsync(ForgotPasswordRequest request, CancellationToken cancellationToken = default);
     Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default);
@@ -32,13 +32,13 @@ public interface IJwtTokenService
     string HashToken(string token);
 }
 
-public interface IEmailService
-{
-    Task<EmailDeliveryResult> SendEmailVerificationAsync(User user, string verificationToken, CancellationToken cancellationToken = default);
-    Task<EmailDeliveryResult> SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default);
-    Task<EmailDeliveryResult> SendApplicationStatusAsync(
-        User user, string jobTitle, JobApplicationStatus status,
-        CancellationToken cancellationToken = default);
-}
+//public interface IEmailService
+//{
+//    Task<EmailDeliveryResult> SendEmailVerificationAsync(User user, string verificationToken, CancellationToken cancellationToken = default);
+//    Task<EmailDeliveryResult> SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default);
+//    Task<EmailDeliveryResult> SendApplicationStatusAsync(
+//        User user, string jobTitle, JobApplicationStatus status,
+//        CancellationToken cancellationToken = default);
+//}
 
 public enum EmailDeliveryResult { Sent, Disabled, Failed }

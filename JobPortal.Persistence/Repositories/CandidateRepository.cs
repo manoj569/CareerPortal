@@ -14,7 +14,7 @@ public sealed class CandidateRepository(
 {
     public Task<User?> GetCandidateAsync(Guid userId, CancellationToken cancellationToken = default) =>
         context.Users.SingleOrDefaultAsync(x => x.Id == userId &&
-            x.RoleId == SystemRoleIds.Candidate && x.EmailConfirmed &&
+            x.RoleId == SystemRoleIds.Candidate &&
             x.Status == UserStatus.Active, cancellationToken);
 
     public Task<CandidateJob?> GetAvailableJobAsync(Guid jobId, CancellationToken cancellationToken = default)

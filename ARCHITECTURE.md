@@ -65,19 +65,24 @@ existing non-Administrator account.
 
 ## Candidate profiles and applications
 
-Candidate endpoints require the `Candidate` role and re-check that the current account is both
-email-verified and Active. Every profile, resume, saved-job, and application query is scoped by
-the authenticated user's identifier; client-supplied candidate identifiers are never accepted.
+Candidate endpoints require the `Candidate` role and re-check that the current account is Active.
+Every profile, resume, saved-job, and application query is scoped by the authenticated user's
+identifier; client-supplied candidate identifiers are never accepted.
 
 Public Candidate registration accepts only first/last name, email, password, Indian mobile number,
 and explicit Terms/Privacy consent. Email is trimmed and normalized for case-insensitive lookup.
 Accepted mobile forms are canonicalized to `+91XXXXXXXXXX`, with a separate normalized value used
 by a filtered unique database index. The existing normalized-email unique index remains
 authoritative. Pre-existing or concurrent email/mobile conflicts return the same generic
-registration response and never trigger token delivery. Public clients cannot select a role or
-set account, verification, membership, payment, or audit state.
+registration response. Registration creates an Active Candidate with the historical
+`EmailConfirmed` compatibility flag set and does not create tokens or send email; the Candidate
+can log in immediately. Public clients cannot select a role or set account, confirmation,
+membership, payment, or audit state.
 During migration, recognizable legacy numbers are canonicalized deterministically; duplicate or
 malformed legacy phone values are cleared without changing account role, status, or login access.
+The email-verification removal compatibility migration activates existing Candidate accounts,
+sets their compatibility confirmation flag, and clears obsolete verification-token state without
+changing Administrator accounts.
 
 - `GET|PUT /api/candidate/profile`
 - `GET|PUT /api/candidate/onboarding`
@@ -188,10 +193,10 @@ storage or a security information and event management system.
 
 ## Transactional email
 
-Email verification and password reset use direct SMTP delivery after token state has been
-committed. Configure SMTP credentials through User Secrets or a production secret manager and
-set `Email:Enabled` only when all required email settings are available. Delivery failures do not
-roll back token state, allowing resend or another password-reset request to recover. A durable
+Password-reset and application-status messages use direct SMTP delivery. Configure SMTP
+credentials through User Secrets or a production secret manager and set `Email:Enabled` only
+when all required email settings are available. Password-reset token state is committed before
+delivery; delivery failures do not expose the token or weaken authentication. A durable
 transactional outbox should be considered before scaling production delivery.
 
 ## Razorpay Test Mode payments

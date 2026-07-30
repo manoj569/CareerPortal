@@ -17,11 +17,11 @@ public sealed class AuthService(
     IUnitOfWork unitOfWork,
     IPasswordHasher passwordHasher,
     IJwtTokenService jwtTokenService,
-    IEmailService emailService,
+    //IEmailService emailService,
     IValidator<RegisterRequest> registerValidator,
     IValidator<LoginRequest> loginValidator,
-    IValidator<VerifyEmailRequest> verifyEmailValidator,
-    IValidator<ResendVerificationRequest> resendVerificationValidator,
+    //IValidator<VerifyEmailRequest> verifyEmailValidator,
+    //IValidator<ResendVerificationRequest> resendVerificationValidator,
     IValidator<RefreshTokenRequest> refreshValidator,
     IValidator<ForgotPasswordRequest> forgotPasswordValidator,
     IValidator<ResetPasswordRequest> resetPasswordValidator,
@@ -30,11 +30,13 @@ public sealed class AuthService(
 {
     private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(30);
     private static readonly TimeSpan PasswordResetLifetime = TimeSpan.FromMinutes(30);
-    private static readonly TimeSpan EmailVerificationLifetime = TimeSpan.FromHours(24);
-    private const string VerificationRequiredMessage =
-        "Registration accepted. Verify your email address before signing in.";
-    private const string ResendMessage =
-        "If an unverified account exists, a verification message will be sent.";
+    //private static readonly TimeSpan EmailVerificationLifetime = TimeSpan.FromHours(24);
+    //private const string VerificationRequiredMessage =
+    //    "Registration accepted. Verify your email address before signing in.";
+    //private const string ResendMessage =
+    //    "If an unverified account exists, a verification message will be sent.";
+    private const string RegistrationSuccessMessage =
+    "Account created successfully. Please log in.";
 
     public async Task<RegistrationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
     {
@@ -42,7 +44,7 @@ public sealed class AuthService(
         {
             Email = request.Email?.Trim() ?? string.Empty,
             FirstName = request.FirstName?.Trim() ?? string.Empty,
-            LastName = request.LastName?.Trim() ?? string.Empty
+            //LastName = request.LastName?.Trim() ?? string.Empty
         };
         await registerValidator.ValidateAndThrowAsync(request, cancellationToken);
         var normalizedEmail = NormalizeEmail(request.Email);
@@ -52,25 +54,22 @@ public sealed class AuthService(
         if (await users.RegistrationIdentityExistsAsync(
                 normalizedEmail, normalizedPhoneNumber, cancellationToken))
         {
-            return new RegistrationResponse(VerificationRequiredMessage);
+            return new RegistrationResponse(RegistrationSuccessMessage);
         }
 
-        var token = GenerateSecureToken();
+        //var token = GenerateSecureToken();
         var user = new User
         {
             Email = request.Email.Trim(),
             NormalizedEmail = normalizedEmail,
             PasswordHash = passwordHasher.Hash(request.Password),
             FirstName = request.FirstName.Trim(),
-            LastName = request.LastName.Trim(),
+            //LastName = request.LastName.Trim(),
             PhoneNumber = normalizedPhoneNumber,
             NormalizedPhoneNumber = normalizedPhoneNumber,
             TermsAndPrivacyAcceptedAtUtc = UtcNow,
-            Status = UserStatus.Pending,
-            EmailConfirmed = false,
-            EmailVerificationTokenHash = HashToken(token),
-            EmailVerificationTokenExpiresAtUtc = UtcNow.Add(EmailVerificationLifetime),
-            EmailVerificationSentAtUtc = UtcNow,
+            Status = UserStatus.Active,
+            EmailConfirmed = true,
             RoleId = SystemRoleIds.Candidate,
             Role = new Role { Id = SystemRoleIds.Candidate, Name = "Candidate", NormalizedName = "CANDIDATE" }
         };
@@ -82,10 +81,10 @@ public sealed class AuthService(
         }
         catch (UniqueConstraintException)
         {
-            return new RegistrationResponse(VerificationRequiredMessage);
+            return new RegistrationResponse(RegistrationSuccessMessage);
         }
-        _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
-        return new RegistrationResponse(VerificationRequiredMessage);
+        //_ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
+        return new RegistrationResponse(RegistrationSuccessMessage);
     }
 
     public async Task<AuthenticationResponse> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default)
@@ -97,9 +96,9 @@ public sealed class AuthService(
         {
             throw new UnauthorizedException("Invalid email address or password.");
         }
-        if (!user.EmailConfirmed) throw new EmailNotVerifiedException();
-        if (user.Status != UserStatus.Active)
-            throw new UnauthorizedException("Invalid email address or password.");
+        //if (!user.EmailConfirmed) throw new EmailNotVerifiedException();
+        //if (user.Status != UserStatus.Active)
+        //    throw new UnauthorizedException("Invalid email address or password.");
 
         user.LastLoginAtUtc = UtcNow;
         users.Update(user);
@@ -108,43 +107,43 @@ public sealed class AuthService(
         return response;
     }
 
-    public async Task<VerificationResponse> VerifyEmailAsync(
-        VerifyEmailRequest request, CancellationToken cancellationToken = default)
-    {
-        await verifyEmailValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
-        var suppliedHash = HashToken(request.Token);
-        if (user is null || user.EmailConfirmed || user.EmailVerificationTokenHash is null ||
-            user.EmailVerificationTokenExpiresAtUtc <= UtcNow ||
-            !FixedTimeEquals(user.EmailVerificationTokenHash, suppliedHash))
-            throw new BadRequestException("The email verification token is invalid or expired.", "invalid_verification_token");
+    //public async Task<VerificationResponse> VerifyEmailAsync(
+    //    VerifyEmailRequest request, CancellationToken cancellationToken = default)
+    //{
+    //    await verifyEmailValidator.ValidateAndThrowAsync(request, cancellationToken);
+    //    var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
+    //    var suppliedHash = HashToken(request.Token);
+    //    if (user is null || user.EmailConfirmed || user.EmailVerificationTokenHash is null ||
+    //        user.EmailVerificationTokenExpiresAtUtc <= UtcNow ||
+    //        !FixedTimeEquals(user.EmailVerificationTokenHash, suppliedHash))
+    //        throw new BadRequestException("The email verification token is invalid or expired.", "invalid_verification_token");
 
-        user.EmailConfirmed = true;
-        user.Status = UserStatus.Active;
-        user.EmailVerificationTokenHash = null;
-        user.EmailVerificationTokenExpiresAtUtc = null;
-        users.Update(user);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-        return new VerificationResponse("Email verified successfully.");
-    }
+    //    user.EmailConfirmed = true;
+    //    user.Status = UserStatus.Active;
+    //    user.EmailVerificationTokenHash = null;
+    //    user.EmailVerificationTokenExpiresAtUtc = null;
+    //    users.Update(user);
+    //    await unitOfWork.SaveChangesAsync(cancellationToken);
+    //    return new VerificationResponse("Email verified successfully.");
+    //}
 
-    public async Task<VerificationResponse> ResendVerificationAsync(
-        ResendVerificationRequest request, CancellationToken cancellationToken = default)
-    {
-        await resendVerificationValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
-        if (user is null || user.EmailConfirmed || user.RoleId != SystemRoleIds.Candidate)
-            return new VerificationResponse(ResendMessage);
+    //public async Task<VerificationResponse> ResendVerificationAsync(
+    //    ResendVerificationRequest request, CancellationToken cancellationToken = default)
+    //{
+    //    await resendVerificationValidator.ValidateAndThrowAsync(request, cancellationToken);
+    //    var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
+    //    if (user is null || user.EmailConfirmed || user.RoleId != SystemRoleIds.Candidate)
+    //        return new VerificationResponse(ResendMessage);
 
-        var token = GenerateSecureToken();
-        user.EmailVerificationTokenHash = HashToken(token);
-        user.EmailVerificationTokenExpiresAtUtc = UtcNow.Add(EmailVerificationLifetime);
-        user.EmailVerificationSentAtUtc = UtcNow;
-        users.Update(user);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-        _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
-        return new VerificationResponse(ResendMessage);
-    }
+    //    var token = GenerateSecureToken();
+    //    user.EmailVerificationTokenHash = HashToken(token);
+    //    user.EmailVerificationTokenExpiresAtUtc = UtcNow.Add(EmailVerificationLifetime);
+    //    user.EmailVerificationSentAtUtc = UtcNow;
+    //    users.Update(user);
+    //    await unitOfWork.SaveChangesAsync(cancellationToken);
+    //    _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
+    //    return new VerificationResponse(ResendMessage);
+    //}
 
     public async Task<AuthenticationResponse> RefreshAsync(RefreshTokenRequest request, string? ipAddress, CancellationToken cancellationToken = default)
     {
@@ -183,7 +182,7 @@ public sealed class AuthService(
         user.PasswordResetTokenExpiresAtUtc = UtcNow.Add(PasswordResetLifetime);
         users.Update(user);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        _ = await emailService.SendPasswordResetAsync(user, token, cancellationToken);
+        //_ = await emailService.SendPasswordResetAsync(user, token, cancellationToken);
     }
 
     public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)

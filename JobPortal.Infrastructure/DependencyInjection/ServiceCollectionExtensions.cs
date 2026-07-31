@@ -17,7 +17,7 @@ public static class ServiceCollectionExtensions
         ValidateEmailConfiguration(configuration);
         services.AddSingleton<IPasswordHasher, Pbkdf2PasswordHasher>();
         services.AddSingleton<IJwtTokenService, JwtTokenService>();
-        //services.AddScoped<IEmailService, SmtpEmailService>();
+        services.AddScoped<IEmailService, SmtpEmailService>();
         services.AddSingleton<IRazorpayGateway, RazorpayGateway>();
         services.AddSingleton<IMembershipPlanProvider, ConfigurationMembershipPlanProvider>();
         services.AddSingleton<IResumeStorage, LocalResumeStorage>();

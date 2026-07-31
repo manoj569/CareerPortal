@@ -9,6 +9,7 @@ using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
 using Xunit;
+using static JobPortal.Application.Features.Jobs.JobSearchQueryValidator;
 
 namespace JobPortal.Application.Tests;
 
@@ -19,7 +20,9 @@ public sealed class AdminManagementTests
     {
         var repository = new JobRepositoryFake();
         var service = new JobService(repository, new UnitOfWorkFake(), new AuditWriterTestDouble(), new CreateJobRequestValidator(),
-            new UpdateJobRequestValidator(), new JobSearchQueryValidator(), TimeProvider.System);
+new UpdateJobRequestValidator(),
+new UpdateRecruiterContactRequestValidator(),
+new JobSearchQueryValidator(), TimeProvider.System);
         var request = ValidJobRequest();
 
         await Assert.ThrowsAsync<BadRequestException>(() => service.CreateAsync(request));

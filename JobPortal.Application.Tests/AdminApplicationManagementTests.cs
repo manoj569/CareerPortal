@@ -435,16 +435,6 @@ public sealed class AdminApplicationManagementTests
     //        return Task.FromResult(Result);
     //    }
 
-    //    public Task<EmailDeliveryResult> SendEmailVerificationAsync(
-    //        User user, string verificationToken,
-    //        CancellationToken cancellationToken = default) =>
-    //        Task.FromResult(Result);
-
-    //    public Task<EmailDeliveryResult> SendPasswordResetAsync(
-    //        User user, string resetToken,
-    //        CancellationToken cancellationToken = default) =>
-    //        Task.FromResult(Result);
-    //}
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
     {

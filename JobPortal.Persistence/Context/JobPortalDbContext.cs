@@ -16,6 +16,7 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     public DbSet<Company> Companies => Set<Company>();
     public DbSet<Category> Categories => Set<Category>();
     public DbSet<Job> Jobs => Set<Job>();
+    public DbSet<JobRecruiterContact> JobRecruiterContacts => Set<JobRecruiterContact>();
     public DbSet<Skill> Skills => Set<Skill>();
     public DbSet<JobSkill> JobSkills => Set<JobSkill>();
     public DbSet<SavedJob> SavedJobs => Set<SavedJob>();
@@ -24,6 +25,7 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<Setting> Settings => Set<Setting>();
     public DbSet<JobApplication> JobApplications => Set<JobApplication>();
+    public DbSet<ApplicationQuotaUsage> ApplicationQuotaUsages => Set<ApplicationQuotaUsage>();
     public DbSet<JobApplicationStatusHistory> JobApplicationStatusHistory =>
         Set<JobApplicationStatusHistory>();
 

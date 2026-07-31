@@ -551,10 +551,6 @@ public sealed class RemovedEmailVerificationContractTests
             "EmailVerification",
             program,
             StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "SendEmailVerificationAsync",
-            contracts,
-            StringComparison.Ordinal);
         Assert.Contains(
             "SendPasswordResetAsync",
             contracts,

@@ -13,8 +13,10 @@ public sealed class JobRepository(JobPortalDbContext context) : IJobRepository
     {
         IQueryable<Job> query = context.Jobs;
         if (includeDeleted) query = query.IgnoreQueryFilters();
-        return query.Include(x => x.Company).Include(x => x.Category)
-            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        return query
+            .Include(x => x.Company)
+            .Include(x => x.Category)
+            .Include(x => x.RecruiterContact).SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
     }
 
     public async Task<(IReadOnlyCollection<Job> Items, int TotalCount)> SearchAsync(JobSearchQuery query, CancellationToken cancellationToken = default)

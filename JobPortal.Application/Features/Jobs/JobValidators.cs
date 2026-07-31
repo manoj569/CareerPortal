@@ -87,4 +87,30 @@ public sealed class JobSearchQueryValidator : AbstractValidator<JobSearchQuery>
         RuleFor(x => x.ExpiresToUtc).GreaterThanOrEqualTo(x => x.ExpiresFromUtc)
             .When(x => x.ExpiresFromUtc.HasValue && x.ExpiresToUtc.HasValue);
     }
+
+    public sealed class UpdateRecruiterContactRequestValidator
+    : AbstractValidator<UpdateRecruiterContactRequest>
+    {
+        public UpdateRecruiterContactRequestValidator()
+        {
+            RuleFor(x => x.ContactName)
+                .NotEmpty()
+                .MaximumLength(150);
+
+            RuleFor(x => x.ContactRole)
+                .NotEmpty()
+                .MaximumLength(150);
+
+            RuleFor(x => x.Email)
+                .NotEmpty()
+                .MaximumLength(256)
+                .EmailAddress();
+
+            RuleFor(x => x.PhoneNumber)
+                .MaximumLength(32)
+                .Matches(@"^\+?[0-9 ()-]{7,32}$")
+                .When(x => !string.IsNullOrWhiteSpace(x.PhoneNumber))
+                .WithMessage("Phone number must contain only valid phone characters.");
+        }
+    }
 }

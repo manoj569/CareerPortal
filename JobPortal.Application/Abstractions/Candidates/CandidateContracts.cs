@@ -12,7 +12,14 @@ public interface ICandidateService
     Task<ResumeResponse> UploadResumeAsync(Guid userId, ResumeUpload upload, CancellationToken cancellationToken = default);
     Task<ResumeDownload> DownloadResumeAsync(Guid userId, CancellationToken cancellationToken = default);
     Task DeleteResumeAsync(Guid userId, CancellationToken cancellationToken = default);
+    Task<RecruiterContactResponse> GetRecruiterContactAsync(
+    Guid userId,
+    Guid jobId,
+    CancellationToken cancellationToken = default);
     Task<PagedResponse<CandidateSavedJobResponse>> GetSavedJobsAsync(Guid userId, CandidatePageQuery query, CancellationToken cancellationToken = default);
+    Task<ApplicationQuotaResponse> GetApplicationQuotaAsync(
+    Guid userId,
+    CancellationToken cancellationToken = default);
     Task SaveJobAsync(Guid userId, Guid jobId, CancellationToken cancellationToken = default);
     Task RemoveSavedJobAsync(Guid userId, Guid jobId, CancellationToken cancellationToken = default);
     Task<JobApplicationResponse> ApplyAsync(Guid userId, Guid jobId, CreateJobApplicationRequest request, CancellationToken cancellationToken = default);

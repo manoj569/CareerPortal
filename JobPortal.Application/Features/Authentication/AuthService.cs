@@ -17,7 +17,7 @@ public sealed class AuthService(
     IUnitOfWork unitOfWork,
     IPasswordHasher passwordHasher,
     IJwtTokenService jwtTokenService,
-    //IEmailService emailService,
+    IEmailService emailService,
     IValidator<RegisterRequest> registerValidator,
     IValidator<LoginRequest> loginValidator,
     //IValidator<VerifyEmailRequest> verifyEmailValidator,
@@ -83,7 +83,6 @@ public sealed class AuthService(
         {
             return new RegistrationResponse(RegistrationSuccessMessage);
         }
-        //_ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
         return new RegistrationResponse(RegistrationSuccessMessage);
     }
 
@@ -141,7 +140,6 @@ public sealed class AuthService(
     //    user.EmailVerificationSentAtUtc = UtcNow;
     //    users.Update(user);
     //    await unitOfWork.SaveChangesAsync(cancellationToken);
-    //    _ = await emailService.SendEmailVerificationAsync(user, token, cancellationToken);
     //    return new VerificationResponse(ResendMessage);
     //}
 
@@ -182,7 +180,7 @@ public sealed class AuthService(
         user.PasswordResetTokenExpiresAtUtc = UtcNow.Add(PasswordResetLifetime);
         users.Update(user);
         await unitOfWork.SaveChangesAsync(cancellationToken);
-        //_ = await emailService.SendPasswordResetAsync(user, token, cancellationToken);
+        _ = await emailService.SendPasswordResetAsync(user, token, cancellationToken);
     }
 
     public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)

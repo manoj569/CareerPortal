@@ -12,6 +12,7 @@ using JobPortal.Persistence.Context;
 using JobPortal.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+using static JobPortal.Application.Features.Jobs.JobSearchQueryValidator;
 
 namespace JobPortal.Application.Tests;
 
@@ -192,9 +193,10 @@ public sealed class AdminJobLifecycleTests
             repository,
             new UnitOfWorkFake(),
             audit,
-            new CreateJobRequestValidator(),
-            new UpdateJobRequestValidator(),
-            new JobSearchQueryValidator(),
+          new CreateJobRequestValidator(),
+new UpdateJobRequestValidator(),
+new UpdateRecruiterContactRequestValidator(),
+new JobSearchQueryValidator(),
             new FixedTimeProvider(Now));
         return new(service, repository, job, audit);
     }

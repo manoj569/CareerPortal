@@ -32,13 +32,12 @@ public interface IJwtTokenService
     string HashToken(string token);
 }
 
-//public interface IEmailService
-//{
-//    Task<EmailDeliveryResult> SendEmailVerificationAsync(User user, string verificationToken, CancellationToken cancellationToken = default);
-//    Task<EmailDeliveryResult> SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default);
-//    Task<EmailDeliveryResult> SendApplicationStatusAsync(
-//        User user, string jobTitle, JobApplicationStatus status,
-//        CancellationToken cancellationToken = default);
-//}
+public interface IEmailService
+{
+    Task<EmailDeliveryResult> SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default);
+    Task<EmailDeliveryResult> SendApplicationStatusAsync(
+        User user, string jobTitle, JobApplicationStatus status,
+        CancellationToken cancellationToken = default);
+}
 
 public enum EmailDeliveryResult { Sent, Disabled, Failed }

@@ -27,7 +27,33 @@ public sealed class CandidateRepository(
             .Select(x => new CandidateJob(x.Id, x.Title, x.Slug, x.Company.Name))
             .SingleOrDefaultAsync(cancellationToken);
     }
+    public Task<CandidateRecruiterContact?> GetApprovedRecruiterContactForAvailableJobAsync(
+    Guid jobId,
+    CancellationToken cancellationToken = default)
+    {
+        var now = timeProvider.GetUtcNow().UtcDateTime;
 
+        return context.Jobs.AsNoTracking()
+            .Where(job =>
+                job.Id == jobId &&
+                job.Status == JobStatus.Published &&
+                !job.IsHidden &&
+                job.PublishedAtUtc.HasValue &&
+                job.ExpiresAtUtc.HasValue &&
+                job.ExpiresAtUtc > now &&
+                job.RecruiterContact != null &&
+                job.RecruiterContact.IsSharingApproved)
+            .Select(job => new CandidateRecruiterContact(
+                job.Id,
+                job.Title,
+                job.Slug,
+                job.Company.Name,
+                job.RecruiterContact!.ContactName,
+                job.RecruiterContact.ContactRole,
+                job.RecruiterContact.Email,
+                job.RecruiterContact.PhoneNumber))
+            .SingleOrDefaultAsync(cancellationToken);
+    }
     public Task<bool> HasActiveMembershipAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         var now = timeProvider.GetUtcNow().UtcDateTime;
@@ -51,7 +77,22 @@ public sealed class CandidateRepository(
         Guid userId, Guid jobId, CancellationToken cancellationToken = default) =>
         context.JobApplications.IgnoreQueryFilters()
             .AnyAsync(x => x.UserId == userId && x.JobId == jobId, cancellationToken);
+    public Task<ApplicationQuotaUsage?> GetQuotaUsageAsync(
+    Guid userId,
+    ApplicationQuotaPeriod period,
+    DateTime periodStartsAtUtc,
+    CancellationToken cancellationToken = default) =>
+    context.ApplicationQuotaUsages
+        .SingleOrDefaultAsync(
+            usage => usage.UserId == userId &&
+                     usage.Period == period &&
+                     usage.PeriodStartsAtUtc == periodStartsAtUtc,
+            cancellationToken);
 
+    public Task AddQuotaUsageAsync(
+        ApplicationQuotaUsage quotaUsage,
+        CancellationToken cancellationToken = default) =>
+        context.ApplicationQuotaUsages.AddAsync(quotaUsage, cancellationToken).AsTask();
     public Task AddApplicationAsync(JobApplication application, CancellationToken cancellationToken = default) =>
         context.JobApplications.AddAsync(application, cancellationToken).AsTask();
 

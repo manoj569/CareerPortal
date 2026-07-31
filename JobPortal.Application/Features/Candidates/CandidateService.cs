@@ -203,7 +203,77 @@ public sealed class CandidateService(
             new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
+    public async Task<RecruiterContactResponse> GetRecruiterContactAsync(
+    Guid userId,
+    Guid jobId,
+    CancellationToken cancellationToken = default)
+    {
+        await RequiredCandidateAsync(userId, cancellationToken);
 
+        if (!await candidates.HasActiveMembershipAsync(userId, cancellationToken))
+        {
+            throw new ConflictException(
+                "An active portal membership is required to view recruiter contact details.");
+        }
+
+        var contact = await candidates.GetApprovedRecruiterContactForAvailableJobAsync(
+            jobId,
+            cancellationToken)
+            ?? throw new NotFoundException(
+                "Recruiter contact details are not available for this job.");
+
+        await auditWriter.AppendAsync(new(
+            AuditAction.View,
+            "RecruiterContact",
+            jobId.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["jobId"] = jobId.ToString(),
+                ["access"] = "membership"
+            },
+            new(userId, "Candidate")),
+            cancellationToken);
+
+        return new RecruiterContactResponse(
+            contact.JobId,
+            contact.JobTitle,
+            contact.JobSlug,
+            contact.CompanyName,
+            contact.ContactName,
+            contact.ContactRole,
+            contact.Email,
+            contact.PhoneNumber);
+    }
+
+    public async Task<ApplicationQuotaResponse> GetApplicationQuotaAsync(
+    Guid userId,
+    CancellationToken cancellationToken = default)
+    {
+        await RequiredCandidateAsync(userId, cancellationToken);
+
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var hasPremiumMembership = await candidates.HasActiveMembershipAsync(
+            userId,
+            cancellationToken);
+
+        var quota = GetApplicationQuotaWindow(nowUtc, hasPremiumMembership);
+
+        var usage = await candidates.GetQuotaUsageAsync(
+            userId,
+            quota.Period,
+            quota.StartsAtUtc,
+            cancellationToken);
+
+        var usedApplications = usage?.UsedApplications ?? 0;
+
+        return new ApplicationQuotaResponse(
+            hasPremiumMembership ? "Premium" : "Free",
+            hasPremiumMembership,
+            quota.Limit,
+            usedApplications,
+            Math.Max(0, quota.Limit - usedApplications),
+            quota.EndsAtUtc);
+    }
     public async Task<JobApplicationResponse> ApplyAsync(
         Guid userId, Guid jobId, CreateJobApplicationRequest request, CancellationToken cancellationToken = default)
     {
@@ -211,10 +281,42 @@ public sealed class CandidateService(
         var user = await RequiredCandidateAsync(userId, cancellationToken);
         var job = await candidates.GetAvailableJobAsync(jobId, cancellationToken)
             ?? throw new NotFoundException("Job was not found.");
-        if (!await candidates.HasActiveMembershipAsync(userId, cancellationToken))
-            throw new ConflictException("An active portal membership is required.");
         if (await candidates.HasApplicationAsync(userId, jobId, cancellationToken))
+        {
             throw new ConflictException("You have already applied to this job.");
+        }
+
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var hasPremiumMembership = await candidates.HasActiveMembershipAsync(userId, cancellationToken);
+
+        var quota = GetApplicationQuotaWindow(nowUtc, hasPremiumMembership);
+
+        var usage = await candidates.GetQuotaUsageAsync(
+            userId,
+            quota.Period,
+            quota.StartsAtUtc,
+            cancellationToken);
+
+        if (usage is null)
+        {
+            usage = new ApplicationQuotaUsage
+            {
+                UserId = userId,
+                Period = quota.Period,
+                PeriodStartsAtUtc = quota.StartsAtUtc,
+                PeriodEndsAtUtc = quota.EndsAtUtc,
+                UsedApplications = 0
+            };
+
+            await candidates.AddQuotaUsageAsync(usage, cancellationToken);
+        }
+
+        if (usage.UsedApplications >= quota.Limit)
+        {
+            throw new ConflictException(quota.ExhaustedMessage);
+        }
+
+        usage.UsedApplications++;
         var application = new JobApplication
         {
             UserId = userId,
@@ -388,4 +490,67 @@ public sealed class CandidateService(
             await resumeStorage.DeleteAsync(storageKey, cancellationToken);
     }
     private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
+
+    private static ApplicationQuotaWindow GetApplicationQuotaWindow(
+    DateTime nowUtc,
+    bool hasPremiumMembership)
+    {
+        var indiaTimeZone = GetIndiaTimeZone();
+        var indiaNow = TimeZoneInfo.ConvertTimeFromUtc(
+            DateTime.SpecifyKind(nowUtc, DateTimeKind.Utc),
+            indiaTimeZone);
+
+        DateTime startsIndia;
+        DateTime endsIndia;
+        ApplicationQuotaPeriod period;
+        int limit;
+        string exhaustedMessage;
+
+        if (hasPremiumMembership)
+        {
+            startsIndia = indiaNow.Date;
+            endsIndia = startsIndia.AddDays(1);
+            period = ApplicationQuotaPeriod.PremiumDaily;
+            limit = 35;
+            exhaustedMessage =
+                "You have reached today's limit of 35 job applications. " +
+                "Your limit resets at 12:00 AM tomorrow (IST).";
+        }
+        else
+        {
+            startsIndia = new DateTime(indiaNow.Year, indiaNow.Month, 1);
+            endsIndia = startsIndia.AddMonths(1);
+            period = ApplicationQuotaPeriod.FreeMonthly;
+            limit = 10;
+            exhaustedMessage =
+                "You have used all 10 free job applications for this month. " +
+                "Upgrade to Premium for up to 35 applications per day.";
+        }
+
+        return new ApplicationQuotaWindow(
+            period,
+            TimeZoneInfo.ConvertTimeToUtc(startsIndia, indiaTimeZone),
+            TimeZoneInfo.ConvertTimeToUtc(endsIndia, indiaTimeZone),
+            limit,
+            exhaustedMessage);
+    }
+
+    private static TimeZoneInfo GetIndiaTimeZone()
+    {
+        try
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("India Standard Time");
+        }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
+        }
+    }
+
+    private sealed record ApplicationQuotaWindow(
+        ApplicationQuotaPeriod Period,
+        DateTime StartsAtUtc,
+        DateTime EndsAtUtc,
+        int Limit,
+        string ExhaustedMessage);
 }

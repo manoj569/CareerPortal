@@ -33,4 +33,5 @@ public sealed class Job : BaseEntity
     public ICollection<SavedJob> SavedByUsers { get; set; } = new List<SavedJob>();
     public ICollection<UserJobHistory> UserHistory { get; set; } = new List<UserJobHistory>();
     public ICollection<JobApplication> Applications { get; set; } = new List<JobApplication>();
+    public JobRecruiterContact? RecruiterContact { get; set; }
 }

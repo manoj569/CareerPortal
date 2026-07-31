@@ -49,3 +49,19 @@ public sealed record JobApplicationResponse(
     Guid Id, Guid JobId, string JobTitle, string JobSlug, string CompanyName,
     JobApplicationStatus Status, string? CoverLetter, string? ResumeFileName,
     DateTime SubmittedAtUtc, DateTime? WithdrawnAtUtc);
+public sealed record RecruiterContactResponse(
+    Guid JobId,
+    string JobTitle,
+    string JobSlug,
+    string CompanyName,
+    string ContactName,
+    string ContactRole,
+    string Email,
+    string? PhoneNumber);
+public sealed record ApplicationQuotaResponse(
+    string Plan,
+    bool IsPremium,
+    int Limit,
+    int UsedApplications,
+    int RemainingApplications,
+    DateTime ResetsAtUtc);

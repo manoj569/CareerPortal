@@ -40,7 +40,13 @@ public enum AuditAction
     Confirm,
     WebhookSuccess,
     WebhookFailure,
-    Activate
+    Activate,
+    View
+}
+public enum ApplicationQuotaPeriod
+{
+    FreeMonthly = 1,
+    PremiumDaily = 2
 }
 public enum SettingScope { Global = 1, User, Company }
 public enum JobApplicationStatus { Submitted = 1, Reviewed, Shortlisted, Rejected, Withdrawn }

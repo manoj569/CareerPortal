@@ -157,6 +157,40 @@ public sealed class JobConfiguration : IEntityTypeConfiguration<Job>
     }
 }
 
+public sealed class JobRecruiterContactConfiguration
+    : IEntityTypeConfiguration<JobRecruiterContact>
+{
+    public void Configure(EntityTypeBuilder<JobRecruiterContact> builder)
+    {
+        builder.ToTable("JobRecruiterContacts");
+        builder.ConfigureBaseEntity();
+
+        builder.Property(x => x.ContactName)
+            .HasMaxLength(150)
+            .IsRequired();
+
+        builder.Property(x => x.ContactRole)
+            .HasMaxLength(150)
+            .IsRequired();
+
+        builder.Property(x => x.Email)
+            .HasMaxLength(256)
+            .IsRequired();
+
+        builder.Property(x => x.PhoneNumber)
+            .HasMaxLength(32);
+
+        builder.HasIndex(x => x.JobId)
+            .IsUnique()
+            .HasFilter("[IsDeleted] = 0");
+
+        builder.HasOne(x => x.Job)
+            .WithOne(x => x.RecruiterContact)
+            .HasForeignKey<JobRecruiterContact>(x => x.JobId)
+            .OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 public sealed class SkillConfiguration : IEntityTypeConfiguration<Skill>
 {
     public void Configure(EntityTypeBuilder<Skill> builder)
@@ -363,5 +397,38 @@ public sealed class SettingConfiguration : IEntityTypeConfiguration<Setting>
         builder.HasIndex(x => new { x.Scope, x.Key }).IsUnique().HasFilter("[UserId] IS NULL AND [IsDeleted] = 0");
         builder.HasIndex(x => new { x.Scope, x.UserId, x.Key }).IsUnique().HasFilter("[UserId] IS NOT NULL AND [IsDeleted] = 0");
         builder.HasOne(x => x.User).WithMany(x => x.Settings).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+    }
+    public sealed class ApplicationQuotaUsageConfiguration
+    : IEntityTypeConfiguration<ApplicationQuotaUsage>
+    {
+        public void Configure(EntityTypeBuilder<ApplicationQuotaUsage> builder)
+        {
+            builder.ToTable(
+                "ApplicationQuotaUsages",
+                table => table.HasCheckConstraint(
+                    "CK_ApplicationQuotaUsages_UsedApplications",
+                    "[UsedApplications] >= 0"));
+
+            builder.ConfigureBaseEntity();
+
+            builder.Property(x => x.Period).IsRequired();
+
+            builder.Property(x => x.PeriodStartsAtUtc).IsRequired();
+
+            builder.Property(x => x.PeriodEndsAtUtc).IsRequired();
+
+            builder.Property(x => x.UsedApplications).IsRequired();
+
+            builder.Property(x => x.RowVersion).IsRowVersion();
+
+            builder.HasIndex(x => new { x.UserId, x.Period, x.PeriodStartsAtUtc })
+                .IsUnique()
+                .HasFilter("[IsDeleted] = 0");
+
+            builder.HasOne(x => x.User)
+                .WithMany()
+                .HasForeignKey(x => x.UserId)
+                .OnDelete(DeleteBehavior.Restrict);
+        }
     }
 }

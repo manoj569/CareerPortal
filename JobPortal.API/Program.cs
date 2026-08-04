@@ -26,6 +26,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
 
+
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Host.UseSerilog((context, services, configuration) => configuration
@@ -194,9 +195,9 @@ if (!builder.Environment.IsDevelopment() &&
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        // ⚠️ READ THE KEY FROM ENVIRONMENT VARIABLES (RENDER)
-        var jwtSecret = Environment.GetEnvironmentVariable("JWT_SECRET")
-            ?? throw new InvalidOperationException("JWT_SECRET environment variable is not set.");
+        // ✅ FIXED: Use builder.Configuration to read the secret from Render's Environment Variables
+        var jwtSecret = builder.Configuration["JWT_SECRET"]
+            ?? throw new InvalidOperationException("JWT_SECRET environment variable is not set in Render.");
 
         options.TokenValidationParameters = new TokenValidationParameters
         {

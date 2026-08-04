@@ -12,6 +12,7 @@ using JobPortal.API.Startup;
 using JobPortal.API.Swagger;
 using JobPortal.Application;
 using JobPortal.Application.Abstractions.Auditing;
+using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Infrastructure;
 using JobPortal.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -97,6 +98,36 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    options.AddPolicy("RegistrationOtp", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("OtpRequest", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("OtpVerification", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
     options.OnRejected = async (context, cancellationToken) =>
     {
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
@@ -120,7 +151,7 @@ builder.Services.AddSwaggerGen(options =>
         Title = "Job Portal API",
         Version = "v1",
         Description =
-            "CareerPortal API including Candidate registration/onboarding and Administrator management endpoints."
+            "CareerPortal API including mobile-OTP Candidate authentication, email password reset, legal content, onboarding, and Administrator management endpoints."
     });
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
@@ -151,6 +182,15 @@ if (signingKey.Length < 32)
 if (!builder.Environment.IsDevelopment() && signingKey.StartsWith("CHANGE_THIS", StringComparison.Ordinal))
     throw new InvalidOperationException("The default JWT signing key cannot be used outside Development.");
 
+var otpHashKey = builder.Configuration["Otp:HashKey"]
+    ?? throw new InvalidOperationException("OTP hash key is not configured.");
+if (otpHashKey.Length < 32)
+    throw new InvalidOperationException("OTP hash key must contain at least 32 characters.");
+if (!builder.Environment.IsDevelopment() &&
+    otpHashKey.StartsWith("CHANGE_THIS", StringComparison.Ordinal))
+    throw new InvalidOperationException(
+        "The default OTP hash key cannot be used outside Development.");
+
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -174,6 +214,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddPersistence(builder.Configuration);
+builder.Services.AddSingleton<IApplicationShutdown, HostApplicationShutdown>();
 builder.Services.AddScoped<AdminBootstrapInitializer>();
 
 var app = builder.Build();
@@ -185,8 +226,6 @@ await using (var scope = app.Services.CreateAsyncScope())
 }
 
 app.UseForwardedHeaders();
-app.UseMiddleware<GlobalExceptionMiddleware>();
-app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseSerilogRequestLogging(options =>
 {
     options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
@@ -197,6 +236,8 @@ app.UseSerilogRequestLogging(options =>
         diagnosticContext.Set("CorrelationId", httpContext.TraceIdentifier);
     };
 });
+app.UseMiddleware<GlobalExceptionMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseResponseCompression();
 
 if (app.Environment.IsDevelopment())

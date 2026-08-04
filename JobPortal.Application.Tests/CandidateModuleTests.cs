@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JobPortal.API.Middleware;
 using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
@@ -7,6 +8,8 @@ using JobPortal.Application.Features.Dashboard;
 using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace JobPortal.Application.Tests;
@@ -67,7 +70,7 @@ public sealed class CandidateModuleTests
         Assert.Equal(10, response.Limit);
         Assert.Equal(0, response.UsedApplications);
         Assert.Equal(10, response.RemainingApplications);
-        Assert.True(response.ResetsAtUtc > DateTime.UtcNow);
+        Assert.True(response.ResetsAtUtc > Now);
     }
 
     [Fact]
@@ -83,7 +86,7 @@ public sealed class CandidateModuleTests
         Assert.Equal(35, response.Limit);
         Assert.Equal(0, response.UsedApplications);
         Assert.Equal(35, response.RemainingApplications);
-        Assert.True(response.ResetsAtUtc > DateTime.UtcNow);
+        Assert.True(response.ResetsAtUtc > Now);
     }
 
     [Theory]
@@ -197,7 +200,7 @@ public sealed class CandidateModuleTests
     }
 
     [Fact]
-    public async Task ApplicationAllowsFreeCandidateAndRequiresAvailableJob()
+    public async Task FreeCandidateCanApplyWhenBelowMonthlyLimit()
     {
         var fixture = CreateFixture();
         fixture.Repository.HasMembership = false;
@@ -219,7 +222,7 @@ public sealed class CandidateModuleTests
                 new(null)));
     }
     [Fact]
-    public async Task FreeCandidateIsBlockedAfterTenApplicationsInTheSameMonth()
+    public async Task FreeCandidateAtMonthlyLimitCannotCreateAnEleventhApplication()
     {
         var fixture = CreateFixture();
         fixture.Repository.HasMembership = false;
@@ -234,20 +237,46 @@ public sealed class CandidateModuleTests
         Assert.Equal(ApplicationQuotaPeriod.FreeMonthly, usage.Period);
         Assert.Equal(1, usage.UsedApplications);
 
-        usage.UsedApplications = 10;
+        usage.UsedApplications = 9;
 
-        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("Tenth application"));
+
+        Assert.Equal(10, usage.UsedApplications);
+
+        var exception = await Assert.ThrowsAsync<ApplicationQuotaExceededException>(() =>
             fixture.Service.ApplyAsync(
                 fixture.Candidate.Id,
                 fixture.Job.Id,
                 new("Another application")));
 
-        Assert.Contains("10 free job applications", exception.Message);
-        Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal("MONTHLY_JOB_LIMIT_REACHED", exception.Code);
+        Assert.True(exception.RedirectToMembership);
+        Assert.Equal(
+            "You've reached your monthly application limit of 10 jobs. Upgrade to Premium for more applications.",
+            exception.Message);
+        Assert.Equal(2, fixture.Repository.AddedApplications.Count);
     }
 
     [Fact]
-    public async Task PremiumCandidateIsBlockedAfterThirtyFiveApplicationsInTheSameDay()
+    public async Task PremiumCandidateCanApplyWhenBelowDailyLimit()
+    {
+        var fixture = CreateFixture();
+        fixture.Repository.HasMembership = true;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("First application"));
+
+        Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal(1, Assert.Single(fixture.Repository.AddedQuotaUsages).UsedApplications);
+    }
+
+    [Fact]
+    public async Task PremiumCandidateAtDailyLimitCannotCreateAThirtySixthApplication()
     {
         var fixture = CreateFixture();
         fixture.Repository.HasMembership = true;
@@ -262,16 +291,100 @@ public sealed class CandidateModuleTests
         Assert.Equal(ApplicationQuotaPeriod.PremiumDaily, usage.Period);
         Assert.Equal(1, usage.UsedApplications);
 
-        usage.UsedApplications = 35;
+        usage.UsedApplications = 34;
 
-        var exception = await Assert.ThrowsAsync<ConflictException>(() =>
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("Thirty-fifth application"));
+
+        Assert.Equal(35, usage.UsedApplications);
+
+        var exception = await Assert.ThrowsAsync<ApplicationQuotaExceededException>(() =>
             fixture.Service.ApplyAsync(
                 fixture.Candidate.Id,
                 fixture.Job.Id,
                 new("Another application")));
 
-        Assert.Contains("today's limit of 35 job applications", exception.Message);
+        Assert.Equal("DAILY_JOB_LIMIT_REACHED", exception.Code);
+        Assert.False(exception.RedirectToMembership);
+        Assert.Equal(
+            "You've reached today's application limit of 35 jobs. Please try again tomorrow.",
+            exception.Message);
+        Assert.Equal(2, fixture.Repository.AddedApplications.Count);
+    }
+
+    [Fact]
+    public async Task FreeMonthlyQuotaResetsForANewCalendarMonth()
+    {
+        var fixture = CreateFixture(new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
+        fixture.Repository.HasMembership = false;
+        fixture.Repository.AddedQuotaUsages.Add(new ApplicationQuotaUsage
+        {
+            UserId = fixture.Candidate.Id,
+            Period = ApplicationQuotaPeriod.FreeMonthly,
+            PeriodStartsAtUtc = new DateTime(2026, 6, 30, 18, 30, 0, DateTimeKind.Utc),
+            PeriodEndsAtUtc = new DateTime(2026, 7, 31, 18, 30, 0, DateTimeKind.Utc),
+            UsedApplications = 10
+        });
+
+        await fixture.Service.ApplyAsync(fixture.Candidate.Id, fixture.Job.Id, new(null));
+
         Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal(2, fixture.Repository.AddedQuotaUsages.Count);
+        Assert.Equal(1, fixture.Repository.AddedQuotaUsages.Single(usage =>
+            usage.PeriodStartsAtUtc == new DateTime(2026, 7, 31, 18, 30, 0, DateTimeKind.Utc))
+            .UsedApplications);
+    }
+
+    [Fact]
+    public async Task PremiumDailyQuotaResetsForANewCalendarDay()
+    {
+        var fixture = CreateFixture(new DateTime(2026, 8, 2, 18, 31, 0, DateTimeKind.Utc));
+        fixture.Repository.HasMembership = true;
+        fixture.Repository.AddedQuotaUsages.Add(new ApplicationQuotaUsage
+        {
+            UserId = fixture.Candidate.Id,
+            Period = ApplicationQuotaPeriod.PremiumDaily,
+            PeriodStartsAtUtc = new DateTime(2026, 8, 1, 18, 30, 0, DateTimeKind.Utc),
+            PeriodEndsAtUtc = new DateTime(2026, 8, 2, 18, 30, 0, DateTimeKind.Utc),
+            UsedApplications = 35
+        });
+
+        await fixture.Service.ApplyAsync(fixture.Candidate.Id, fixture.Job.Id, new(null));
+
+        Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal(2, fixture.Repository.AddedQuotaUsages.Count);
+        Assert.Equal(1, fixture.Repository.AddedQuotaUsages.Single(usage =>
+            usage.PeriodStartsAtUtc == new DateTime(2026, 8, 2, 18, 30, 0, DateTimeKind.Utc))
+            .UsedApplications);
+    }
+
+    [Fact]
+    public async Task QuotaExceededReturnsTheRequiredForbiddenResponse()
+    {
+        var context = new DefaultHttpContext();
+        await using var responseBody = new MemoryStream();
+        context.Response.Body = responseBody;
+        var middleware = new GlobalExceptionMiddleware(
+            _ => Task.FromException(new ApplicationQuotaExceededException(
+                "MONTHLY_JOB_LIMIT_REACHED",
+                "You've reached your monthly application limit of 10 jobs. Upgrade to Premium for more applications.",
+                true)),
+            NullLogger<GlobalExceptionMiddleware>.Instance);
+
+        await middleware.InvokeAsync(context);
+
+        responseBody.Position = 0;
+        var response = await JsonSerializer.DeserializeAsync<ApplicationQuotaLimitErrorResponse>(
+            responseBody,
+            WebJson);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.NotNull(response);
+        Assert.False(response.Success);
+        Assert.Equal("MONTHLY_JOB_LIMIT_REACHED", response.Code);
+        Assert.True(response.RedirectToMembership);
     }
 
     [Fact]
@@ -447,7 +560,7 @@ public sealed class CandidateModuleTests
         Assert.Equal(10, fixture.Repository.LastQuery.PageSize);
     }
 
-    private static Fixture CreateFixture()
+    private static Fixture CreateFixture(DateTime? nowUtc = null)
     {
         var candidate = new User
         {
@@ -478,7 +591,7 @@ public sealed class CandidateModuleTests
         var storage = new FakeResumeStorage();
         var unitOfWork = new FakeUnitOfWork();
         var audit = new AuditWriterTestDouble();
-        var timeProvider = new FixedTimeProvider(Now);
+        var timeProvider = new FixedTimeProvider(nowUtc ?? Now);
         var service = new CandidateService(
             repository, dashboard, storage, unitOfWork, audit,
             new UpdateCandidateProfileRequestValidator(),
@@ -620,8 +733,14 @@ public sealed class CandidateModuleTests
         public Task<int> MarkAllNotificationsReadAsync(
             Guid userId, DateTime readAtUtc, CancellationToken cancellationToken = default) =>
             Task.FromResult(0);
-    }
 
+        // 👇 ADD THIS MISSING METHOD IMPLEMENTATION
+        public Task AddNotificationAsync(Notification notification, CancellationToken cancellationToken = default)
+        {
+            // For unit tests, we just need it to succeed. We don't need to save it anywhere.
+            return Task.CompletedTask;
+        }
+    }
     private sealed class FakeResumeStorage : IResumeStorage
     {
         public List<string> Stored { get; } = [];

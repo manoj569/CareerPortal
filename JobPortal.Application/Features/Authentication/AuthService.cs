@@ -1,103 +1,443 @@
 using System.Security.Cryptography;
 using System.Text;
 using FluentValidation;
+using JobPortal.Application.Abstractions.Auditing;
 using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
 using JobPortal.Application.Common.Text;
+using JobPortal.Application.Features.Legal;
 using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
+using Microsoft.Extensions.Logging;
 
 namespace JobPortal.Application.Features.Authentication;
 
 public sealed class AuthService(
     IUserRepository users,
+    IAuthenticationChallengeRepository challenges,
     IRefreshTokenRepository refreshTokens,
     IUnitOfWork unitOfWork,
     IPasswordHasher passwordHasher,
     IJwtTokenService jwtTokenService,
+    IOneTimePasswordService otpService,
+    ISmsService smsService,
     IEmailService emailService,
+    IAuditWriter auditWriter,
     IValidator<RegisterRequest> registerValidator,
+    IValidator<VerifyRegistrationOtpRequest> registrationOtpValidator,
+    IValidator<ResendRegistrationOtpRequest> registrationResendValidator,
     IValidator<LoginRequest> loginValidator,
-    //IValidator<VerifyEmailRequest> verifyEmailValidator,
-    //IValidator<ResendVerificationRequest> resendVerificationValidator,
+    IValidator<RequestLoginOtpRequest> requestLoginOtpValidator,
+    IValidator<LoginWithOtpRequest> loginWithOtpValidator,
+    IValidator<RequestPasswordResetRequest> requestPasswordResetValidator,
+    IValidator<CompletePasswordResetRequest> completeResetValidator,
     IValidator<RefreshTokenRequest> refreshValidator,
-    IValidator<ForgotPasswordRequest> forgotPasswordValidator,
-    IValidator<ResetPasswordRequest> resetPasswordValidator,
     IValidator<ChangePasswordRequest> changePasswordValidator,
-    TimeProvider timeProvider) : IAuthService
+    TimeProvider timeProvider,
+    IApplicationShutdown applicationShutdown,
+    ILogger<AuthService> logger) : IAuthService
 {
-    private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(30);
-    private static readonly TimeSpan PasswordResetLifetime = TimeSpan.FromMinutes(30);
-    //private static readonly TimeSpan EmailVerificationLifetime = TimeSpan.FromHours(24);
-    //private const string VerificationRequiredMessage =
-    //    "Registration accepted. Verify your email address before signing in.";
-    //private const string ResendMessage =
-    //    "If an unverified account exists, a verification message will be sent.";
-    private const string RegistrationSuccessMessage =
-    "Account created successfully. Please log in.";
+    private static readonly Action<ILogger, string, OtpPurpose, string, string, string, string, Exception?>
+        AuthenticationInformation = LoggerMessage.Define<string, OtpPurpose, string, string, string, string>(
+            LogLevel.Information,
+            new EventId(1200, nameof(AuthenticationInformation)),
+            "Authentication event {Category}: purpose {Purpose}, challenge {ChallengeId}, mobile suffix {LastFourDigits}, status {Status}, exception type {ExceptionType}.");
 
-    public async Task<RegistrationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default)
+    private static readonly Action<ILogger, string, OtpPurpose, string, string, string, string, Exception?>
+        AuthenticationWarning = LoggerMessage.Define<string, OtpPurpose, string, string, string, string>(
+            LogLevel.Warning,
+            new EventId(1201, nameof(AuthenticationWarning)),
+            "Authentication event {Category}: purpose {Purpose}, challenge {ChallengeId}, mobile suffix {LastFourDigits}, status {Status}, exception type {ExceptionType}.");
+
+    private static readonly Action<ILogger, string, OtpPurpose, string, string, string, string, Exception?>
+        AuthenticationError = LoggerMessage.Define<string, OtpPurpose, string, string, string, string>(
+            LogLevel.Error,
+            new EventId(1202, nameof(AuthenticationError)),
+            "Authentication event {Category}: purpose {Purpose}, challenge {ChallengeId}, mobile suffix {LastFourDigits}, status {Status}, exception type {ExceptionType}.");
+
+
+    // Constants
+    private static readonly TimeSpan OtpLifetime = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan PendingRegistrationLifetime = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan ResendCooldown = TimeSpan.FromSeconds(60);
+    private static readonly TimeSpan SendRateWindow = TimeSpan.FromMinutes(15);
+    private static readonly TimeSpan PasswordResetTokenLifetime = TimeSpan.FromMinutes(30);
+    private static readonly TimeSpan RefreshTokenLifetime = TimeSpan.FromDays(30);
+    private static readonly TimeSpan OtpDeliveryBudget = TimeSpan.FromSeconds(20);
+    private const int MaximumOtpAttempts = 5;
+    private const int MaximumSendsPerWindow = 5;
+    private const string RegistrationPendingMessage = "Registration request accepted. Use resend OTP if needed.";
+    private const string OtpSentMessage = "If the mobile number is eligible, an OTP has been sent.";
+    private const string RegistrationSuccessMessage = "Registration successful. Please log in.";
+    private const string PasswordChangedMessage = "Password changed successfully. Please log in.";
+    private const string PasswordResetRequestedMessage =
+        "If an account exists for this email address, a password reset link has been sent.";
+
+    public async Task<RegistrationChallengeResponse> RegisterAsync(
+        RegisterRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var challengePersisted = false;
+        LogAuthenticationEvent(
+            "registration_started",
+            OtpPurpose.Registration,
+            request.PhoneNumber,
+            status: "started");
+        try
+        {
+            return await RegisterCoreAsync(
+                request,
+                () => challengePersisted = true,
+                cancellationToken);
+        }
+        catch (OperationCanceledException exception)
+            when (cancellationToken.IsCancellationRequested &&
+                !challengePersisted)
+        {
+            LogAuthenticationEvent(
+                "request_cancelled_before_persist",
+                OtpPurpose.Registration,
+                request.PhoneNumber,
+                status: "cancelled",
+                exception: exception,
+                level: LogLevel.Warning);
+            throw;
+        }
+    }
+
+    private async Task<RegistrationChallengeResponse> RegisterCoreAsync(
+        RegisterRequest request,
+        Action markChallengePersisted,
+        CancellationToken cancellationToken)
     {
         request = request with
         {
-            Email = request.Email?.Trim() ?? string.Empty,
-            FirstName = request.FirstName?.Trim() ?? string.Empty,
-            //LastName = request.LastName?.Trim() ?? string.Empty
+            FullName = request.FullName?.Trim() ?? string.Empty,
+            Email = request.Email?.Trim() ?? string.Empty
         };
-        await registerValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var normalizedEmail = NormalizeEmail(request.Email);
-        _ = IndianMobileNumber.TryNormalize(
-            request.PhoneNumber, out var normalizedPhoneNumber);
 
-        if (await users.RegistrationIdentityExistsAsync(
-                normalizedEmail, normalizedPhoneNumber, cancellationToken))
+        await registerValidator.ValidateAndThrowAsync(request, cancellationToken);
+        _ = PersonalName.TrySplit(request.FullName, out var firstName, out var lastName);
+        var normalizedEmail = NormalizeEmail(request.Email);
+        _ = IndianMobileNumber.TryNormalizeTenDigit(request.PhoneNumber, out var normalizedPhoneNumber);
+
+        LogAuthenticationEvent(
+            "registration_validated",
+            OtpPurpose.Registration,
+            normalizedPhoneNumber,
+            status: "validated");
+
+        var identityExists = await users.RegistrationIdentityExistsAsync(
+            normalizedEmail,
+            normalizedPhoneNumber,
+            cancellationToken);
+        LogAuthenticationEvent(
+            "registration_identity_checked",
+            OtpPurpose.Registration,
+            normalizedPhoneNumber,
+            status: identityExists ? "existing_user" : "available");
+        if (identityExists)
         {
-            return new RegistrationResponse(RegistrationSuccessMessage);
+            LogAuthenticationEvent(
+                "send_skipped_existing_user",
+                OtpPurpose.Registration,
+                normalizedPhoneNumber,
+                status: "skipped");
+            return DecoyRegistrationResponse();
         }
 
-        //var token = GenerateSecureToken();
-        var user = new User
+        if (await IsMobileSendRateExceededAsync(normalizedPhoneNumber, OtpPurpose.Registration, cancellationToken))
         {
-            Email = request.Email.Trim(),
+            LogAuthenticationEvent(
+                "send_skipped_rate_limit",
+                OtpPurpose.Registration,
+                normalizedPhoneNumber,
+                status: "skipped");
+            return DecoyRegistrationResponse();
+        }
+
+        var existing = await challenges.GetPendingByIdentityAsync(normalizedEmail, normalizedPhoneNumber, cancellationToken);
+        if (existing is not null)
+        {
+            if (existing.ExpiresAtUtc <= UtcNow)
+            {
+                LogAuthenticationEvent(
+                    "pending_registration_found",
+                    OtpPurpose.Registration,
+                    normalizedPhoneNumber,
+                    status: "expired");
+                existing.ClosedAtUtc = UtcNow;
+                foreach (var oldChallenge in existing.OtpChallenges.Where(challenge => challenge.ConsumedAtUtc is null))
+                {
+                    oldChallenge.ConsumedAtUtc = UtcNow;
+                    challenges.Update(oldChallenge);
+                }
+                challenges.Update(existing);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            else
+            {
+                var currentChallenge = existing.OtpChallenges
+                    .Where(challenge => challenge.Purpose == OtpPurpose.Registration && challenge.ConsumedAtUtc is null)
+                    .OrderByDescending(challenge => challenge.LastSentAtUtc)
+                    .FirstOrDefault();
+
+                LogAuthenticationEvent(
+                    "pending_registration_found",
+                    OtpPurpose.Registration,
+                    normalizedPhoneNumber,
+                    currentChallenge?.Id,
+                    currentChallenge is null ? "challenge_missing" : "active");
+
+                if (currentChallenge is not null)
+                {
+                    var timeSinceLastSend = UtcNow - currentChallenge.LastSentAtUtc;
+                    if (timeSinceLastSend < ResendCooldown)
+                    {
+                        LogAuthenticationEvent(
+                            "send_skipped_cooldown",
+                            OtpPurpose.Registration,
+                            normalizedPhoneNumber,
+                            currentChallenge.Id,
+                            "skipped");
+                        return new(currentChallenge.Id, RegistrationPendingMessage, currentChallenge.ExpiresAtUtc);
+                    }
+
+                    if (await IsMobileSendRateExceededAsync(normalizedPhoneNumber, OtpPurpose.Registration, cancellationToken))
+                    {
+                        LogAuthenticationEvent(
+                            "send_skipped_rate_limit",
+                            OtpPurpose.Registration,
+                            normalizedPhoneNumber,
+                            currentChallenge.Id,
+                            "skipped");
+                        return DecoyRegistrationResponse();
+                    }
+
+                    var newOtp = RotateChallenge(currentChallenge);
+                    existing.ExpiresAtUtc = UtcNow.Add(PendingRegistrationLifetime);
+                    challenges.Update(currentChallenge);
+                    challenges.Update(existing);
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                    markChallengePersisted();
+
+                    LogAuthenticationEvent(
+                        "otp_challenge_persisted",
+                        OtpPurpose.Registration,
+                        normalizedPhoneNumber,
+                        currentChallenge.Id,
+                        "rotated");
+                    await SendPersistedOtpAsync(
+                        currentChallenge.Id,
+                        normalizedPhoneNumber,
+                        newOtp,
+                        OtpPurpose.Registration);
+
+                    return new(currentChallenge.Id, RegistrationPendingMessage, currentChallenge.ExpiresAtUtc);
+                }
+            }
+        }
+
+        var generatedOtp = otpService.Generate();
+
+        var pending = new PendingRegistration
+        {
+            Email = request.Email,
             NormalizedEmail = normalizedEmail,
             PasswordHash = passwordHasher.Hash(request.Password),
-            FirstName = request.FirstName.Trim(),
-            //LastName = request.LastName.Trim(),
-            PhoneNumber = normalizedPhoneNumber,
+            FirstName = firstName,
+            LastName = lastName,
             NormalizedPhoneNumber = normalizedPhoneNumber,
             TermsAndPrivacyAcceptedAtUtc = UtcNow,
+            TermsAndPrivacyVersion = LegalDocumentCatalog.CurrentVersion,
+            ExpiresAtUtc = UtcNow.Add(PendingRegistrationLifetime)
+        };
+        var challenge = NewChallenge(normalizedPhoneNumber, OtpPurpose.Registration, generatedOtp);
+        challenge.PendingRegistration = pending;
+        challenge.PendingRegistrationId = pending.Id;
+        await challenges.AddPendingAsync(pending, cancellationToken);
+        await challenges.AddChallengeAsync(challenge, cancellationToken);
+        LogAuthenticationEvent(
+            "pending_registration_created",
+            OtpPurpose.Registration,
+            normalizedPhoneNumber,
+            challenge.Id,
+            "created");
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            markChallengePersisted();
+        }
+        catch (UniqueConstraintException exception)
+        {
+            LogAuthenticationEvent(
+                "registration_identity_checked",
+                OtpPurpose.Registration,
+                normalizedPhoneNumber,
+                challenge.Id,
+                "uniqueness_conflict",
+                exception,
+                LogLevel.Warning);
+            return DecoyRegistrationResponse();
+        }
+
+        LogAuthenticationEvent(
+            "otp_challenge_persisted",
+            OtpPurpose.Registration,
+            normalizedPhoneNumber,
+            challenge.Id,
+            "created");
+        await SendPersistedOtpAsync(
+            challenge.Id,
+            normalizedPhoneNumber,
+            generatedOtp,
+            OtpPurpose.Registration);
+        return new(challenge.Id, RegistrationPendingMessage, challenge.ExpiresAtUtc);
+    }
+
+    public async Task<RegistrationResponse> VerifyRegistrationOtpAsync(
+        VerifyRegistrationOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await registrationOtpValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var challenge = await challenges.GetChallengeByIdAsync(request.ChallengeId, cancellationToken);
+        if (challenge is { Purpose: OtpPurpose.Registration, ConsumedAtUtc: not null, UserId: not null })
+            return new(RegistrationSuccessMessage);
+
+        var pending = challenge?.PendingRegistration;
+        if (challenge is null ||
+            challenge.Purpose != OtpPurpose.Registration ||
+            pending is null ||
+            pending.ClosedAtUtc is not null ||
+            pending.ExpiresAtUtc <= UtcNow ||
+            string.IsNullOrWhiteSpace(pending.PasswordHash))
+            throw InvalidOtp();
+
+        await ValidateOtpAsync(challenge, request.Otp, cancellationToken);
+        var user = new User
+        {
+            Email = pending.Email,
+            NormalizedEmail = pending.NormalizedEmail,
+            PasswordHash = pending.PasswordHash,
+            FirstName = pending.FirstName,
+            LastName = pending.LastName,
+            PhoneNumber = pending.NormalizedPhoneNumber,
+            NormalizedPhoneNumber = pending.NormalizedPhoneNumber,
+            PhoneConfirmed = true,
+            TermsAndPrivacyAcceptedAtUtc = pending.TermsAndPrivacyAcceptedAtUtc,
+            TermsAndPrivacyVersion = pending.TermsAndPrivacyVersion,
             Status = UserStatus.Active,
             EmailConfirmed = true,
             RoleId = SystemRoleIds.Candidate,
-            Role = new Role { Id = SystemRoleIds.Candidate, Name = "Candidate", NormalizedName = "CANDIDATE" }
+            Role = new Role
+            {
+                Id = SystemRoleIds.Candidate,
+                Name = "Candidate",
+                NormalizedName = "CANDIDATE"
+            }
         };
-
+        challenge.ConsumedAtUtc = UtcNow;
+        challenge.User = user;
+        challenge.UserId = user.Id;
+        pending.CompletedAtUtc = UtcNow;
+        pending.ClosedAtUtc = UtcNow;
+        pending.CompletedUser = user;
+        pending.CompletedUserId = user.Id;
+        pending.PasswordHash = null;
         await users.AddAsync(user, cancellationToken);
+        challenges.Update(challenge);
+        challenges.Update(pending);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Create,
+            "User",
+            user.Id.ToString(),
+            new Dictionary<string, string?> { ["source"] = "mobileOtp" },
+            new(user.Id, "Candidate")), cancellationToken);
         try
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
         catch (UniqueConstraintException)
         {
-            return new RegistrationResponse(RegistrationSuccessMessage);
+            return new(RegistrationSuccessMessage);
         }
-        return new RegistrationResponse(RegistrationSuccessMessage);
+        return new(RegistrationSuccessMessage);
     }
 
-    public async Task<AuthenticationResponse> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default)
+    public async Task<MessageResponse> ResendRegistrationOtpAsync(
+        ResendRegistrationOtpRequest request,
+        CancellationToken cancellationToken = default)
     {
-        await loginValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
+        await registrationResendValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var challenge = await challenges.GetChallengeByIdAsync(request.ChallengeId, cancellationToken);
+        var pending = challenge?.PendingRegistration;
+        if (challenge is null ||
+            challenge.Purpose != OtpPurpose.Registration ||
+            challenge.ConsumedAtUtc is not null ||
+            pending is null ||
+            pending.ClosedAtUtc is not null ||
+            pending.ExpiresAtUtc <= UtcNow)
+            return new(RegistrationPendingMessage);
 
-        if (user is null || !passwordHasher.Verify(request.Password, user.PasswordHash))
+        if (UtcNow - challenge.LastSentAtUtc < ResendCooldown)
         {
-            throw new UnauthorizedException("Invalid email address or password.");
+            LogAuthenticationEvent(
+                "send_skipped_cooldown",
+                OtpPurpose.Registration,
+                challenge.NormalizedPhoneNumber,
+                challenge.Id,
+                "skipped");
+            return new(RegistrationPendingMessage);
         }
-        //if (!user.EmailConfirmed) throw new EmailNotVerifiedException();
-        //if (user.Status != UserStatus.Active)
-        //    throw new UnauthorizedException("Invalid email address or password.");
+
+        if (await IsMobileSendRateExceededAsync(challenge.NormalizedPhoneNumber, OtpPurpose.Registration, cancellationToken))
+        {
+            LogAuthenticationEvent(
+                "send_skipped_rate_limit",
+                OtpPurpose.Registration,
+                challenge.NormalizedPhoneNumber,
+                challenge.Id,
+                "skipped");
+            return new(RegistrationPendingMessage);
+        }
+
+        var newOtp = RotateChallenge(challenge);
+        pending.ExpiresAtUtc = UtcNow.Add(PendingRegistrationLifetime);
+        challenges.Update(challenge);
+        challenges.Update(pending);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        await SendPersistedOtpAsync(
+            challenge.Id,
+            challenge.NormalizedPhoneNumber,
+            newOtp,
+            OtpPurpose.Registration);
+
+        return new(RegistrationPendingMessage);
+    }
+
+    public async Task<AuthenticationResponse> LoginAsync(
+        LoginRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+    {
+        request = request with { Identifier = request.Identifier?.Trim() ?? string.Empty };
+        await loginValidator.ValidateAndThrowAsync(request, cancellationToken);
+        User? user;
+        if (request.Identifier.Contains('@', StringComparison.Ordinal))
+        {
+            user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Identifier), cancellationToken);
+        }
+        else
+        {
+            _ = IndianMobileNumber.TryNormalize(request.Identifier, out var normalizedPhoneNumber);
+            user = await users.GetByNormalizedPhoneAsync(normalizedPhoneNumber, cancellationToken);
+        }
+
+        if (user is null || user.Status != UserStatus.Active || !passwordHasher.Verify(request.Password, user.PasswordHash))
+            throw InvalidCredentials();
 
         user.LastLoginAtUtc = UtcNow;
         users.Update(user);
@@ -106,55 +446,128 @@ public sealed class AuthService(
         return response;
     }
 
-    //public async Task<VerificationResponse> VerifyEmailAsync(
-    //    VerifyEmailRequest request, CancellationToken cancellationToken = default)
-    //{
-    //    await verifyEmailValidator.ValidateAndThrowAsync(request, cancellationToken);
-    //    var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
-    //    var suppliedHash = HashToken(request.Token);
-    //    if (user is null || user.EmailConfirmed || user.EmailVerificationTokenHash is null ||
-    //        user.EmailVerificationTokenExpiresAtUtc <= UtcNow ||
-    //        !FixedTimeEquals(user.EmailVerificationTokenHash, suppliedHash))
-    //        throw new BadRequestException("The email verification token is invalid or expired.", "invalid_verification_token");
+    public async Task<MessageResponse> RequestLoginOtpAsync(
+        RequestLoginOtpRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await requestLoginOtpValidator.ValidateAndThrowAsync(request, cancellationToken);
+        _ = IndianMobileNumber.TryNormalizeTenDigit(request.PhoneNumber, out var normalizedPhoneNumber);
+        await RequestUserOtpAsync(normalizedPhoneNumber, OtpPurpose.Login, candidateOnly: true, cancellationToken);
+        return new(OtpSentMessage);
+    }
 
-    //    user.EmailConfirmed = true;
-    //    user.Status = UserStatus.Active;
-    //    user.EmailVerificationTokenHash = null;
-    //    user.EmailVerificationTokenExpiresAtUtc = null;
-    //    users.Update(user);
-    //    await unitOfWork.SaveChangesAsync(cancellationToken);
-    //    return new VerificationResponse("Email verified successfully.");
-    //}
+    public async Task<AuthenticationResponse> LoginWithOtpAsync(
+        LoginWithOtpRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
+    {
+        await loginWithOtpValidator.ValidateAndThrowAsync(request, cancellationToken);
+        _ = IndianMobileNumber.TryNormalizeTenDigit(request.PhoneNumber, out var normalizedPhoneNumber);
+        var challenge = await challenges.GetLatestForPhoneAsync(normalizedPhoneNumber, OtpPurpose.Login, cancellationToken);
+        var user = challenge?.User;
+        if (challenge is null ||
+            user is null ||
+            user.RoleId != SystemRoleIds.Candidate ||
+            user.Status != UserStatus.Active ||
+            !user.PhoneConfirmed)
+            throw InvalidOtp();
 
-    //public async Task<VerificationResponse> ResendVerificationAsync(
-    //    ResendVerificationRequest request, CancellationToken cancellationToken = default)
-    //{
-    //    await resendVerificationValidator.ValidateAndThrowAsync(request, cancellationToken);
-    //    var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
-    //    if (user is null || user.EmailConfirmed || user.RoleId != SystemRoleIds.Candidate)
-    //        return new VerificationResponse(ResendMessage);
+        await ValidateOtpAsync(challenge, request.Otp, cancellationToken);
+        challenge.ConsumedAtUtc = UtcNow;
+        user.LastLoginAtUtc = UtcNow;
+        challenges.Update(challenge);
+        users.Update(user);
+        var response = await IssueTokensAsync(user, ipAddress, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Login,
+            "User",
+            user.Id.ToString(),
+            new Dictionary<string, string?> { ["source"] = "mobileOtp" },
+            new(user.Id, "Candidate")), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return response;
+    }
 
-    //    var token = GenerateSecureToken();
-    //    user.EmailVerificationTokenHash = HashToken(token);
-    //    user.EmailVerificationTokenExpiresAtUtc = UtcNow.Add(EmailVerificationLifetime);
-    //    user.EmailVerificationSentAtUtc = UtcNow;
-    //    users.Update(user);
-    //    await unitOfWork.SaveChangesAsync(cancellationToken);
-    //    return new VerificationResponse(ResendMessage);
-    //}
+    public async Task<MessageResponse> RequestPasswordResetAsync(
+        RequestPasswordResetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        request = request with { Email = request.Email?.Trim() ?? string.Empty };
+        await requestPasswordResetValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var user = await users.GetByNormalizedEmailAsync(
+            NormalizeEmail(request.Email),
+            cancellationToken);
+        if (user is not { Status: UserStatus.Active })
+            return new(PasswordResetRequestedMessage);
 
-    public async Task<AuthenticationResponse> RefreshAsync(RefreshTokenRequest request, string? ipAddress, CancellationToken cancellationToken = default)
+        var rawToken = GeneratePasswordResetToken();
+        user.PasswordResetTokenHash = HashPasswordResetToken(rawToken);
+        user.PasswordResetTokenExpiresAtUtc = UtcNow.Add(PasswordResetTokenLifetime);
+        users.Update(user);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "User",
+            user.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["operation"] = "passwordResetRequested"
+            },
+            new(user.Id, user.Role.Name)), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        _ = await emailService.SendPasswordResetAsync(
+            user,
+            rawToken,
+            cancellationToken);
+        return new(PasswordResetRequestedMessage);
+    }
+
+    public async Task<MessageResponse> CompletePasswordResetAsync(
+        CompletePasswordResetRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        request = request with { Email = request.Email?.Trim() ?? string.Empty };
+        await completeResetValidator.ValidateAndThrowAsync(request, cancellationToken);
+        var user = await users.GetByNormalizedEmailAsync(
+            NormalizeEmail(request.Email),
+            cancellationToken);
+        if (user is not { Status: UserStatus.Active } ||
+            string.IsNullOrWhiteSpace(user.PasswordResetTokenHash) ||
+            user.PasswordResetTokenExpiresAtUtc is null ||
+            user.PasswordResetTokenExpiresAtUtc <= UtcNow ||
+            !VerifyPasswordResetToken(request.Token, user.PasswordResetTokenHash))
+            throw InvalidPasswordReset();
+
+        user.PasswordHash = passwordHasher.Hash(request.NewPassword);
+        user.PasswordResetTokenHash = null;
+        user.PasswordResetTokenExpiresAtUtc = null;
+        users.Update(user);
+        await refreshTokens.RevokeActiveForUserAsync(user.Id, UtcNow, cancellationToken);
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "User",
+            user.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["operation"] = "passwordResetCompleted"
+            },
+            new(user.Id, user.Role.Name)), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return new(PasswordChangedMessage);
+    }
+
+    public async Task<AuthenticationResponse> RefreshAsync(
+        RefreshTokenRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
     {
         await refreshValidator.ValidateAndThrowAsync(request, cancellationToken);
         var tokenHash = jwtTokenService.HashToken(request.RefreshToken);
         var existingToken = await refreshTokens.GetByTokenHashAsync(tokenHash, cancellationToken);
-
-        if (existingToken is null || existingToken.RevokedAtUtc is not null ||
-            existingToken.ExpiresAtUtc <= UtcNow || existingToken.User.Status != UserStatus.Active ||
-            !existingToken.User.EmailConfirmed)
-        {
+        if (existingToken is null ||
+            existingToken.RevokedAtUtc is not null ||
+            existingToken.ExpiresAtUtc <= UtcNow ||
+            existingToken.User.Status != UserStatus.Active)
             throw new UnauthorizedException("The refresh token is invalid or expired.");
-        }
 
         var response = await IssueTokensAsync(existingToken.User, ipAddress, cancellationToken);
         existingToken.RevokedAtUtc = UtcNow;
@@ -165,52 +578,15 @@ public sealed class AuthService(
         return response;
     }
 
-    public async Task ForgotPasswordAsync(ForgotPasswordRequest request, CancellationToken cancellationToken = default)
-    {
-        await forgotPasswordValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
-
-        if (user is null || user.Status != UserStatus.Active)
-        {
-            return;
-        }
-
-        var token = jwtTokenService.GenerateRefreshToken();
-        user.PasswordResetTokenHash = jwtTokenService.HashToken(token);
-        user.PasswordResetTokenExpiresAtUtc = UtcNow.Add(PasswordResetLifetime);
-        users.Update(user);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-        _ = await emailService.SendPasswordResetAsync(user, token, cancellationToken);
-    }
-
-    public async Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default)
-    {
-        await resetPasswordValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var user = await users.GetByNormalizedEmailAsync(NormalizeEmail(request.Email), cancellationToken);
-        var resetTokenHash = jwtTokenService.HashToken(request.Token);
-
-        if (user is null || user.PasswordResetTokenExpiresAtUtc <= UtcNow || user.PasswordResetTokenHash is null || !CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(user.PasswordResetTokenHash), Encoding.UTF8.GetBytes(resetTokenHash)))
-        {
-            throw new BadRequestException("The password reset token is invalid or expired.", "invalid_reset_token");
-        }
-
-        user.PasswordHash = passwordHasher.Hash(request.NewPassword);
-        user.PasswordResetTokenHash = null;
-        user.PasswordResetTokenExpiresAtUtc = null;
-        users.Update(user);
-        await refreshTokens.RevokeActiveForUserAsync(user.Id, UtcNow, cancellationToken);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-    }
-
-    public async Task ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken cancellationToken = default)
+    public async Task ChangePasswordAsync(
+        Guid userId,
+        ChangePasswordRequest request,
+        CancellationToken cancellationToken = default)
     {
         await changePasswordValidator.ValidateAndThrowAsync(request, cancellationToken);
         var user = await users.GetByIdWithRoleAsync(userId, cancellationToken) ?? throw new UnauthorizedException();
-
         if (!passwordHasher.Verify(request.CurrentPassword, user.PasswordHash))
-        {
             throw new BadRequestException("The current password is incorrect.", "invalid_current_password");
-        }
 
         user.PasswordHash = passwordHasher.Hash(request.NewPassword);
         users.Update(user);
@@ -218,15 +594,15 @@ public sealed class AuthService(
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task LogoutAsync(Guid userId, LogoutRequest request, string? ipAddress, CancellationToken cancellationToken = default)
+    public async Task LogoutAsync(
+        Guid userId,
+        LogoutRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default)
     {
         await refreshValidator.ValidateAndThrowAsync(new RefreshTokenRequest(request.RefreshToken), cancellationToken);
         var token = await refreshTokens.GetByTokenHashAsync(jwtTokenService.HashToken(request.RefreshToken), cancellationToken);
-
-        if (token is null || token.UserId != userId || token.RevokedAtUtc is not null)
-        {
-            return;
-        }
+        if (token is null || token.UserId != userId || token.RevokedAtUtc is not null) return;
 
         token.RevokedAtUtc = UtcNow;
         token.RevokedByIp = ipAddress;
@@ -234,7 +610,250 @@ public sealed class AuthService(
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
 
-    private async Task<AuthenticationResponse> IssueTokensAsync(User user, string? ipAddress, CancellationToken cancellationToken)
+    private async Task RequestUserOtpAsync(
+        string normalizedPhoneNumber,
+        OtpPurpose purpose,
+        bool candidateOnly,
+        CancellationToken cancellationToken)
+    {
+        if (await IsMobileSendRateExceededAsync(normalizedPhoneNumber, purpose, cancellationToken))
+        {
+            LogAuthenticationEvent(
+                "send_skipped_rate_limit",
+                purpose,
+                normalizedPhoneNumber,
+                status: "skipped");
+            return;
+        }
+        var user = await users.GetByNormalizedPhoneAsync(normalizedPhoneNumber, cancellationToken);
+        var isEligible = user is { Status: UserStatus.Active, PhoneConfirmed: true } && (!candidateOnly || user.RoleId == SystemRoleIds.Candidate);
+
+        var latest = await challenges.GetLatestForPhoneAsync(normalizedPhoneNumber, purpose, cancellationToken);
+        if (latest is not null && UtcNow - latest.LastSentAtUtc < ResendCooldown)
+        {
+            LogAuthenticationEvent(
+                "send_skipped_cooldown",
+                purpose,
+                normalizedPhoneNumber,
+                latest.Id,
+                "skipped");
+            return;
+        }
+
+        string generatedOtp;
+        OtpChallenge challenge;
+        if (latest is not null && latest.ConsumedAtUtc is null)
+        {
+            challenge = latest;
+            generatedOtp = RotateChallenge(challenge);
+            challenge.VerifiedAtUtc = null;
+            challenge.ResetChallengeExpiresAtUtc = null;
+            if (isEligible)
+            {
+                challenge.User = user;
+                challenge.UserId = user!.Id;
+            }
+            challenges.Update(challenge);
+        }
+        else
+        {
+            generatedOtp = otpService.Generate();
+            challenge = NewChallenge(normalizedPhoneNumber, purpose, generatedOtp);
+            if (isEligible)
+            {
+                challenge.User = user;
+                challenge.UserId = user!.Id;
+            }
+            await challenges.AddChallengeAsync(challenge, cancellationToken);
+        }
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        if (isEligible)
+        {
+            await SendPersistedOtpAsync(
+                challenge.Id,
+                normalizedPhoneNumber,
+                generatedOtp,
+                purpose);
+        }
+        else
+        {
+            LogAuthenticationEvent(
+                "send_skipped_ineligible",
+                purpose,
+                normalizedPhoneNumber,
+                challenge.Id,
+                "skipped");
+        }
+    }
+
+    private async Task ValidateOtpAsync(
+        OtpChallenge challenge,
+        string otp,
+        CancellationToken cancellationToken)
+    {
+        if (challenge.ConsumedAtUtc is not null ||
+            challenge.ExpiresAtUtc <= UtcNow ||
+            challenge.FailedAttemptCount >= MaximumOtpAttempts)
+            throw InvalidOtp();
+        if (otpService.Verify(otp, challenge.OtpHash)) return;
+
+        challenge.FailedAttemptCount++;
+        challenges.Update(challenge);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        throw InvalidOtp();
+    }
+
+    private async Task<bool> IsMobileSendRateExceededAsync(
+        string normalizedPhoneNumber,
+        OtpPurpose purpose,
+        CancellationToken cancellationToken)
+    {
+        var sent = await challenges.CountSentSinceAsync(
+            normalizedPhoneNumber,
+            purpose,
+            UtcNow.Subtract(SendRateWindow),
+            cancellationToken);
+        return sent >= MaximumSendsPerWindow;
+    }
+
+    private async Task<SmsDeliveryResult> SendPersistedOtpAsync(
+        Guid challengeId,
+        string normalizedPhoneNumber,
+        string otp,
+        OtpPurpose purpose)
+    {
+        using var deliveryCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            applicationShutdown.ApplicationStopping);
+        deliveryCancellation.CancelAfter(OtpDeliveryBudget);
+
+        LogAuthenticationEvent(
+            "sms_delivery_started_after_persist",
+            purpose,
+            normalizedPhoneNumber,
+            challengeId,
+            "started");
+        try
+        {
+            var result = await smsService.SendOtpAsync(
+                normalizedPhoneNumber,
+                otp,
+                purpose,
+                deliveryCancellation.Token);
+
+            var category = result switch
+            {
+                SmsDeliveryResult.TimedOut => "sms_delivery_timeout",
+                SmsDeliveryResult.Failed => "sms_delivery_failed",
+                _ => "sms_delivery_completed"
+            };
+            var level = result switch
+            {
+                SmsDeliveryResult.TimedOut => LogLevel.Warning,
+                SmsDeliveryResult.Failed => LogLevel.Error,
+                _ => LogLevel.Information
+            };
+            LogAuthenticationEvent(
+                category,
+                purpose,
+                normalizedPhoneNumber,
+                challengeId,
+                result.ToString(),
+                level: level);
+            return result;
+        }
+        catch (OperationCanceledException exception)
+        {
+            var applicationStopping =
+                applicationShutdown.ApplicationStopping.IsCancellationRequested;
+            LogAuthenticationEvent(
+                applicationStopping
+                    ? "sms_delivery_failed"
+                    : "sms_delivery_timeout",
+                purpose,
+                normalizedPhoneNumber,
+                challengeId,
+                applicationStopping ? "application_shutdown" : "timeout",
+                exception,
+                applicationStopping ? LogLevel.Error : LogLevel.Warning);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogAuthenticationEvent(
+                "sms_delivery_failed",
+                purpose,
+                normalizedPhoneNumber,
+                challengeId,
+                "failed",
+                exception,
+                LogLevel.Error);
+            throw;
+        }
+    }
+
+    private void LogAuthenticationEvent(
+        string category,
+        OtpPurpose purpose,
+        string normalizedPhoneNumber,
+        Guid? challengeId = null,
+        string status = "none",
+        Exception? exception = null,
+        LogLevel level = LogLevel.Information)
+    {
+        var write = level switch
+        {
+            LogLevel.Error => AuthenticationError,
+            LogLevel.Warning => AuthenticationWarning,
+            _ => AuthenticationInformation
+        };
+        write(
+            logger,
+            category,
+            purpose,
+            challengeId?.ToString() ?? "none",
+            SafePhoneSuffix(normalizedPhoneNumber),
+            status,
+            exception?.GetType().Name ?? "none",
+            null);
+    }
+
+    private static string SafePhoneSuffix(string? normalizedPhoneNumber)
+    {
+        if (string.IsNullOrWhiteSpace(normalizedPhoneNumber))
+            return "unavailable";
+        var digits = new string(normalizedPhoneNumber.Where(char.IsDigit).ToArray());
+        return digits.Length >= 4 ? digits[^4..] : "unavailable";
+    }
+
+    private OtpChallenge NewChallenge(
+        string normalizedPhoneNumber,
+        OtpPurpose purpose,
+        string otp) => new()
+        {
+            Purpose = purpose,
+            NormalizedPhoneNumber = normalizedPhoneNumber,
+            OtpHash = otpService.Hash(otp),
+            ExpiresAtUtc = UtcNow.Add(OtpLifetime),
+            LastSentAtUtc = UtcNow,
+            SendCount = 1
+        };
+
+    private string RotateChallenge(OtpChallenge challenge)
+    {
+        var otp = otpService.Generate();
+        challenge.OtpHash = otpService.Hash(otp);
+        challenge.ExpiresAtUtc = UtcNow.Add(OtpLifetime);
+        challenge.FailedAttemptCount = 0;
+        challenge.LastSentAtUtc = UtcNow;
+        challenge.SendCount++;
+        return otp;
+    }
+
+    private async Task<AuthenticationResponse> IssueTokensAsync(
+        User user,
+        string? ipAddress,
+        CancellationToken cancellationToken)
     {
         var accessToken = jwtTokenService.CreateAccessToken(user);
         var rawRefreshToken = jwtTokenService.GenerateRefreshToken();
@@ -245,26 +864,54 @@ public sealed class AuthService(
             CreatedByIp = ipAddress,
             UserId = user.Id
         };
-
         await refreshTokens.AddAsync(refreshToken, cancellationToken);
-        return new AuthenticationResponse(
+        return new(
             accessToken.Token,
             accessToken.ExpiresAtUtc,
             rawRefreshToken,
             refreshToken.ExpiresAtUtc,
-            new AuthenticatedUserDto(user.Id, user.Email, user.FirstName, user.LastName, user.Role.Name));
+            new(user.Id, user.Email, user.FirstName, user.LastName, user.Role.Name));
     }
 
-    private static string NormalizeEmail(string email) => email.Trim().ToUpperInvariant();
-    private static string GenerateSecureToken()
+    private RegistrationChallengeResponse DecoyRegistrationResponse() => new(
+        Guid.NewGuid(),
+        RegistrationPendingMessage,
+        UtcNow.Add(OtpLifetime));
+
+    private static UnauthorizedException InvalidCredentials() => new("Invalid identifier or password.");
+
+    private static BadRequestException InvalidOtp() => new("The OTP is invalid or expired.", "invalid_otp");
+
+    private static BadRequestException InvalidPasswordReset() => new(
+        "The password reset link is invalid or expired.",
+        "invalid_password_reset");
+
+    private static string GeneratePasswordResetToken() =>
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
+            .TrimEnd('=')
+            .Replace('+', '-')
+            .Replace('/', '_');
+
+    private static string HashPasswordResetToken(string rawToken) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken)));
+
+    private static bool VerifyPasswordResetToken(
+        string rawToken,
+        string expectedHash)
     {
-        var bytes = RandomNumberGenerator.GetBytes(32);
-        return Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        try
+        {
+            return CryptographicOperations.FixedTimeEquals(
+                Convert.FromHexString(HashPasswordResetToken(rawToken)),
+                Convert.FromHexString(expectedHash));
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
     }
-    private static string HashToken(string token) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
-    private static bool FixedTimeEquals(string expected, string actual) =>
-        CryptographicOperations.FixedTimeEquals(
-            Convert.FromHexString(expected), Convert.FromHexString(actual));
+
+    private static string NormalizeEmail(string email) => email.Trim().ToLowerInvariant();
+
     private DateTime UtcNow => timeProvider.GetUtcNow().UtcDateTime;
 }

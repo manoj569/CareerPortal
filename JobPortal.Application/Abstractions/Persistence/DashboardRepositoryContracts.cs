@@ -16,4 +16,5 @@ public interface IDashboardRepository
     Task<(IReadOnlyCollection<NotificationResponse> Items, int TotalCount, int UnreadCount)> GetNotificationsAsync(Guid userId, DashboardQuery query, bool? isRead, CancellationToken cancellationToken = default);
     Task<Notification?> GetNotificationAsync(Guid userId, Guid notificationId, CancellationToken cancellationToken = default);
     Task<int> MarkAllNotificationsReadAsync(Guid userId, DateTime readAtUtc, CancellationToken cancellationToken = default);
+    Task AddNotificationAsync(Notification notification, CancellationToken cancellationToken = default);
 }

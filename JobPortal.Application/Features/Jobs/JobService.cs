@@ -37,7 +37,10 @@ public sealed class JobService(
         job.Apply(new UpdateJobRequest(request.Title, request.Description, request.CompanyId, request.CategoryId, request.ApplicationUrl,
             request.Responsibilities, request.Requirements, request.Benefits, request.Location,
             request.MinimumSalary, request.MaximumSalary, request.CurrencyCode, request.EmploymentType,
-            request.WorkplaceType, request.ExperienceLevel, request.ExpiresAtUtc));
+            request.WorkplaceType, request.ExperienceLevel, request.ExpiresAtUtc,
+            request.MinimumExperienceYears, request.MaximumExperienceYears,
+            request.InternshipDurationMonths, request.IsFlexibleDuration, request.Department,
+            request.RoleCategory, request.EducationRequirement, request.PostedByType));
 
         await jobs.AddAsync(job, cancellationToken);
         await auditWriter.AppendAsync(new(
@@ -292,7 +295,10 @@ public sealed class JobService(
         job.Title, job.Description, job.CompanyId, job.CategoryId, job.ApplicationUrl,
         job.Responsibilities, job.Requirements, job.Benefits, job.Location,
         job.MinimumSalary, job.MaximumSalary, job.CurrencyCode, job.EmploymentType,
-        job.WorkplaceType, job.ExperienceLevel, job.ExpiresAtUtc);
+        job.WorkplaceType, job.ExperienceLevel, job.ExpiresAtUtc,
+        job.MinimumExperienceYears, job.MaximumExperienceYears,
+        job.InternshipDurationMonths, job.IsFlexibleDuration, job.Department,
+        job.RoleCategory, job.EducationRequirement, job.PostedByType);
 
     private static string Slugify(string value)
     {

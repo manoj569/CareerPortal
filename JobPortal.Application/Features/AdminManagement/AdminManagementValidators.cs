@@ -1,4 +1,5 @@
 using FluentValidation;
+using JobPortal.Domain.Enums;
 
 namespace JobPortal.Application.Features.AdminManagement;
 
@@ -24,6 +25,7 @@ public sealed class CreateCompanyRequestValidator : AbstractValidator<CreateComp
         RuleFor(x => x.Industry).MaximumLength(150);
         RuleFor(x => x.Location).MaximumLength(250);
         RuleFor(x => x.EmployeeCount).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.CompanyType).IsInEnum();
     }
 }
 
@@ -46,6 +48,7 @@ public sealed class UpdateCompanyRequestValidator : AbstractValidator<UpdateComp
             RuleFor(x => x.Industry).MaximumLength(150);
             RuleFor(x => x.Location).MaximumLength(250);
             RuleFor(x => x.EmployeeCount).GreaterThanOrEqualTo(0);
+            RuleFor(x => x.CompanyType).IsInEnum();
         }
     }
 }

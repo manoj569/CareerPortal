@@ -9,6 +9,8 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     public DbSet<User> Users => Set<User>();
     public DbSet<Role> Roles => Set<Role>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
+    public DbSet<PendingRegistration> PendingRegistrations => Set<PendingRegistration>();
+    public DbSet<OtpChallenge> OtpChallenges => Set<OtpChallenge>();
     public DbSet<Membership> Memberships => Set<Membership>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<PaymentHistory> PaymentHistories => Set<PaymentHistory>();
@@ -21,13 +23,15 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     public DbSet<JobSkill> JobSkills => Set<JobSkill>();
     public DbSet<SavedJob> SavedJobs => Set<SavedJob>();
     public DbSet<UserJobHistory> UserJobHistories => Set<UserJobHistory>();
+
+    // ✅ Notifications Table
     public DbSet<Notification> Notifications => Set<Notification>();
+
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
-    public DbSet<Setting> Settings => Set<Setting>();
+    public DbSet<Setting> Setting => Set<Setting>();
     public DbSet<JobApplication> JobApplications => Set<JobApplication>();
     public DbSet<ApplicationQuotaUsage> ApplicationQuotaUsages => Set<ApplicationQuotaUsage>();
-    public DbSet<JobApplicationStatusHistory> JobApplicationStatusHistory =>
-        Set<JobApplicationStatusHistory>();
+    public DbSet<JobApplicationStatusHistory> JobApplicationStatusHistory => Set<JobApplicationStatusHistory>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -46,6 +50,18 @@ public sealed class JobPortalDbContext(DbContextOptions<JobPortalDbContext> opti
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(JobPortalDbContext).Assembly);
+
+        // ✅ Configure Notifications table
+        modelBuilder.Entity<Notification>()
+            .HasOne<User>()
+            .WithMany()
+            .HasForeignKey(n => n.UserId)
+            .OnDelete(DeleteBehavior.Restrict); // Prevents cascade delete
+
+        // ✅ High-performance Index for fetching user notifications
+        modelBuilder.Entity<Notification>()
+            .HasIndex(n => new { n.UserId, n.IsRead });
+
         base.OnModelCreating(modelBuilder);
     }
 

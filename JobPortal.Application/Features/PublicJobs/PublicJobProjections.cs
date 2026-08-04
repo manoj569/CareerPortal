@@ -12,5 +12,9 @@ public static class PublicJobProjections
             job.CategoryId, job.Category.Name, job.Location,
             job.MinimumSalary, job.MaximumSalary, job.CurrencyCode,
             job.EmploymentType, job.WorkplaceType, job.ExperienceLevel,
-            job.IsFeatured, job.PublishedAtUtc!.Value, job.ExpiresAtUtc);
+            job.IsFeatured, job.PublishedAtUtc!.Value, job.ExpiresAtUtc,
+            job.MinimumExperienceYears, job.MaximumExperienceYears,
+            job.InternshipDurationMonths, job.IsFlexibleDuration,
+            job.Department, job.RoleCategory, job.EducationRequirement,
+            job.PostedByType, job.Company.CompanyType, job.Company.Industry);
 }

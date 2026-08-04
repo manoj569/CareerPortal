@@ -15,7 +15,15 @@ internal static class JobValidationRules
         Expression<Func<T, string>> currencyCode,
         Expression<Func<T, EmploymentType>> employmentType,
         Expression<Func<T, WorkplaceType>> workplaceType,
-        Expression<Func<T, ExperienceLevel>> experienceLevel)
+        Expression<Func<T, ExperienceLevel>> experienceLevel,
+        Expression<Func<T, int?>> minimumExperienceYears,
+        Expression<Func<T, int?>> maximumExperienceYears,
+        Expression<Func<T, int?>> internshipDurationMonths,
+        Expression<Func<T, bool>> isFlexibleDuration,
+        Expression<Func<T, string?>> department,
+        Expression<Func<T, string?>> roleCategory,
+        Expression<Func<T, string?>> educationRequirement,
+        Expression<Func<T, PostedByType?>> postedByType)
     {
         validator.RuleFor(title).NotEmpty().MaximumLength(250);
         validator.RuleFor(description).NotEmpty().MaximumLength(16000);
@@ -31,12 +39,42 @@ internal static class JobValidationRules
         validator.RuleFor(employmentType).IsInEnum();
         validator.RuleFor(workplaceType).IsInEnum();
         validator.RuleFor(experienceLevel).IsInEnum();
+        validator.RuleFor(minimumExperienceYears).InclusiveBetween(0, 60);
+        validator.RuleFor(maximumExperienceYears).InclusiveBetween(0, 60);
+        validator.RuleFor(department).MaximumLength(150);
+        validator.RuleFor(roleCategory).MaximumLength(150);
+        validator.RuleFor(educationRequirement).MaximumLength(200);
+        validator.RuleFor(postedByType).IsInEnum();
         var minimumSalaryAccessor = minimumSalary.Compile();
         var maximumSalaryAccessor = maximumSalary.Compile();
         validator.RuleFor(maximumSalary)
             .GreaterThanOrEqualTo(minimumSalary)
             .When(x => minimumSalaryAccessor(x).HasValue && maximumSalaryAccessor(x).HasValue)
             .WithMessage("Maximum salary must be greater than or equal to minimum salary.");
+        var minimumExperienceAccessor = minimumExperienceYears.Compile();
+        var maximumExperienceAccessor = maximumExperienceYears.Compile();
+        validator.RuleFor(maximumExperienceYears)
+            .GreaterThanOrEqualTo(minimumExperienceYears)
+            .When(x => minimumExperienceAccessor(x).HasValue && maximumExperienceAccessor(x).HasValue)
+            .WithMessage("Maximum experience years must be greater than or equal to minimum experience years.");
+        var employmentTypeAccessor = employmentType.Compile();
+        var durationAccessor = internshipDurationMonths.Compile();
+        var flexibleAccessor = isFlexibleDuration.Compile();
+        validator.RuleFor(internshipDurationMonths)
+            .Must(value => !value.HasValue || value is 1 or 2 or 3 or 6)
+            .WithMessage("Internship duration must be 1, 2, 3, or 6 months.");
+        validator.RuleFor(internshipDurationMonths)
+            .Null()
+            .When(x => employmentTypeAccessor(x) != EmploymentType.Internship)
+            .WithMessage("Internship duration is available only for internship jobs.");
+        validator.RuleFor(isFlexibleDuration)
+            .Equal(false)
+            .When(x => employmentTypeAccessor(x) != EmploymentType.Internship)
+            .WithMessage("Flexible duration is available only for internship jobs.");
+        validator.RuleFor(internshipDurationMonths)
+            .Null()
+            .When(x => flexibleAccessor(x) && durationAccessor(x).HasValue)
+            .WithMessage("Choose either a fixed internship duration or flexible duration.");
     }
 }
 
@@ -47,7 +85,11 @@ public sealed class CreateJobRequestValidator : AbstractValidator<CreateJobReque
         JobValidationRules.Apply(this, x => x.Title, x => x.Description, x => x.CompanyId, x => x.CategoryId,
             x => x.Responsibilities, x => x.Requirements, x => x.Benefits, x => x.Location,
             x => x.MinimumSalary, x => x.MaximumSalary, x => x.CurrencyCode,
-            x => x.EmploymentType, x => x.WorkplaceType, x => x.ExperienceLevel);
+            x => x.EmploymentType, x => x.WorkplaceType, x => x.ExperienceLevel,
+            x => x.MinimumExperienceYears, x => x.MaximumExperienceYears,
+            x => x.InternshipDurationMonths, x => x.IsFlexibleDuration,
+            x => x.Department, x => x.RoleCategory, x => x.EducationRequirement,
+            x => x.PostedByType);
         RuleFor(x => x.ApplicationUrl).NotEmpty().MaximumLength(2048)
             .Must(x => Uri.TryCreate(x, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
             .WithMessage("ApplicationUrl must be an absolute HTTP or HTTPS URL.");
@@ -61,7 +103,11 @@ public sealed class UpdateJobRequestValidator : AbstractValidator<UpdateJobReque
         JobValidationRules.Apply(this, x => x.Title, x => x.Description, x => x.CompanyId, x => x.CategoryId,
             x => x.Responsibilities, x => x.Requirements, x => x.Benefits, x => x.Location,
             x => x.MinimumSalary, x => x.MaximumSalary, x => x.CurrencyCode,
-            x => x.EmploymentType, x => x.WorkplaceType, x => x.ExperienceLevel);
+            x => x.EmploymentType, x => x.WorkplaceType, x => x.ExperienceLevel,
+            x => x.MinimumExperienceYears, x => x.MaximumExperienceYears,
+            x => x.InternshipDurationMonths, x => x.IsFlexibleDuration,
+            x => x.Department, x => x.RoleCategory, x => x.EducationRequirement,
+            x => x.PostedByType);
         RuleFor(x => x.ApplicationUrl).NotEmpty().MaximumLength(2048)
             .Must(x => Uri.TryCreate(x, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
             .WithMessage("ApplicationUrl must be an absolute HTTP or HTTPS URL.");

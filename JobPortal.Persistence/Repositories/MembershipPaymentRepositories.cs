@@ -18,6 +18,7 @@ public sealed class MembershipRepository(
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         return context.Jobs.AsNoTracking()
             .Where(x => x.Slug == slug && x.Status == JobStatus.Published && !x.IsHidden &&
+                !x.IsDeleted && x.PublishedAtUtc.HasValue &&
                 (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow))
             .Select(x => new AvailableJobAccess(x.Id, x.ApplicationUrl))
             .SingleOrDefaultAsync(cancellationToken);

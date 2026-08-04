@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using FluentValidation;
 using JobPortal.Application.Common.Text;
 
@@ -7,78 +8,120 @@ public sealed class RegisterRequestValidator : AbstractValidator<RegisterRequest
 {
     public RegisterRequestValidator()
     {
-        RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256);
-        RuleFor(x => x.FirstName).NotEmpty().MinimumLength(2).MaximumLength(100)
-            .Must(BeSafeName).WithMessage("FirstName contains invalid characters.");
-        //RuleFor(x => x.LastName).NotEmpty().MinimumLength(2).MaximumLength(100)
-        //    .Must(BeSafeName).WithMessage("LastName contains invalid characters.");
-        RuleFor(x => x.PhoneNumber).NotEmpty().MaximumLength(32)
-            .Must(value => IndianMobileNumber.TryNormalize(value, out _))
-            .WithMessage("PhoneNumber must be a valid Indian mobile number.");
-        RuleFor(x => x.HasAcceptedTermsAndPrivacy).Equal(true)
+        RuleFor(x => x.FullName)
+            .NotEmpty()
+            .MaximumLength(201)
+            .Must(value => PersonalName.TrySplit(value, out _, out _))
+            .WithMessage(
+                "FullName must contain Unicode letters separated by single spaces only.");
+        RuleFor(x => x.Email)
+            .NotEmpty()
+            .MaximumLength(256)
+            .EmailAddress();
+        RuleFor(x => x.Password)
+            .NotEmpty()
+            .MinimumLength(6)
+            .MaximumLength(128);
+        RuleFor(x => x.PhoneNumber)
+            .NotEmpty()
+            .Must(value => IndianMobileNumber.TryNormalizeTenDigit(value, out _))
+            .WithMessage("PhoneNumber must be a valid ten-digit Indian mobile number.");
+        RuleFor(x => x.HasAcceptedTermsAndPrivacy)
+            .Equal(true)
             .WithMessage("Terms and Privacy consent is required.");
-        //RuleFor(x => x.Password).NotEmpty().MinimumLength(12).MaximumLength(128)
-        //    .Matches("[A-Z]").WithMessage("Password must contain an uppercase letter.")
-        //    .Matches("[a-z]").WithMessage("Password must contain a lowercase letter.")
-        //    .Matches("[0-9]").WithMessage("Password must contain a number.")
-        //    .Matches("[^a-zA-Z0-9]").WithMessage("Password must contain a special character.")
-        //    .Must((request, password) => DoesNotContainPersonalData(request, password))
-        //    .WithMessage("Password must not contain your name, email name, or mobile number.");
     }
+}
 
-    private static bool BeSafeName(string value)
+public sealed class VerifyRegistrationOtpRequestValidator :
+    AbstractValidator<VerifyRegistrationOtpRequest>
+{
+    public VerifyRegistrationOtpRequestValidator()
     {
-        var trimmed = value.Trim();
-        return trimmed.Length > 0 &&
-            !trimmed.Any(char.IsControl) &&
-            trimmed.Any(char.IsLetter);
+        RuleFor(x => x.ChallengeId).NotEmpty();
+        RuleFor(x => x.Otp).Must(OtpValidation.IsValid)
+            .WithMessage("Otp must contain exactly six digits.");
     }
+}
 
-    private static bool DoesNotContainPersonalData(
-        RegisterRequest request, string password)
-    {
-        if (string.IsNullOrEmpty(password))
-            return true;
-        var emailLocalPart = request.Email.Trim().Split('@', 2)[0];
-        _ = IndianMobileNumber.TryNormalize(request.PhoneNumber, out var mobile);
-        var values = new[]
-        {
-            emailLocalPart,
-            request.FirstName.Trim(),
-            //request.LastName.Trim(),
-            mobile,
-            mobile.TrimStart('+'),
-            mobile.Length == 13 ? mobile[3..] : string.Empty
-        };
-        return values
-            .Where(value => value.Length > 0)
-            .All(value => !password.Contains(value, StringComparison.OrdinalIgnoreCase));
-    }
+public sealed class ResendRegistrationOtpRequestValidator :
+    AbstractValidator<ResendRegistrationOtpRequest>
+{
+    public ResendRegistrationOtpRequestValidator() =>
+        RuleFor(x => x.ChallengeId).NotEmpty();
 }
 
 public sealed class LoginRequestValidator : AbstractValidator<LoginRequest>
 {
-    public LoginRequestValidator() { RuleFor(x => x.Email).NotEmpty().EmailAddress(); RuleFor(x => x.Password).NotEmpty().MaximumLength(128); }
+    public LoginRequestValidator()
+    {
+        RuleFor(x => x.Identifier)
+            .NotEmpty()
+            .MaximumLength(256)
+            .Must(BeEmailOrIndianMobile)
+            .WithMessage("Identifier must be a valid email address or Indian mobile number.");
+        RuleFor(x => x.Password).NotEmpty().MaximumLength(128);
+    }
+
+    private static bool BeEmailOrIndianMobile(string value) =>
+        new EmailAddressAttribute().IsValid(value.Trim()) ||
+        IndianMobileNumber.TryNormalize(value, out _);
+}
+
+public sealed class RequestLoginOtpRequestValidator :
+    AbstractValidator<RequestLoginOtpRequest>
+{
+    public RequestLoginOtpRequestValidator() =>
+        RuleFor(x => x.PhoneNumber)
+            .NotEmpty()
+            .Must(value => IndianMobileNumber.TryNormalizeTenDigit(value, out _))
+            .WithMessage("PhoneNumber must be a valid ten-digit Indian mobile number.");
+}
+
+public sealed class LoginWithOtpRequestValidator :
+    AbstractValidator<LoginWithOtpRequest>
+{
+    public LoginWithOtpRequestValidator()
+    {
+        RuleFor(x => x.PhoneNumber)
+            .NotEmpty()
+            .Must(value => IndianMobileNumber.TryNormalizeTenDigit(value, out _))
+            .WithMessage("PhoneNumber must be a valid ten-digit Indian mobile number.");
+        RuleFor(x => x.Otp).Must(OtpValidation.IsValid)
+            .WithMessage("Otp must contain exactly six digits.");
+    }
+}
+
+public sealed class RequestPasswordResetRequestValidator :
+    AbstractValidator<RequestPasswordResetRequest>
+{
+    public RequestPasswordResetRequestValidator() =>
+        RuleFor(x => x.Email)
+            .NotEmpty()
+            .MaximumLength(256)
+            .EmailAddress();
+}
+
+public sealed class CompletePasswordResetRequestValidator :
+    AbstractValidator<CompletePasswordResetRequest>
+{
+    public CompletePasswordResetRequestValidator()
+    {
+        RuleFor(x => x.Email)
+            .NotEmpty()
+            .MaximumLength(256)
+            .EmailAddress();
+        RuleFor(x => x.Token).NotEmpty().MaximumLength(512);
+        RuleFor(x => x.NewPassword).SetValidator(new PasswordValidator());
+        RuleFor(x => x.ConfirmPassword)
+            .Equal(x => x.NewPassword)
+            .WithMessage("ConfirmPassword must match NewPassword.");
+    }
 }
 
 public sealed class RefreshTokenRequestValidator : AbstractValidator<RefreshTokenRequest>
 {
-    public RefreshTokenRequestValidator() { RuleFor(x => x.RefreshToken).NotEmpty().MaximumLength(512); }
-}
-
-public sealed class ForgotPasswordRequestValidator : AbstractValidator<ForgotPasswordRequest>
-{
-    public ForgotPasswordRequestValidator() { RuleFor(x => x.Email).NotEmpty().EmailAddress().MaximumLength(256); }
-}
-
-public sealed class ResetPasswordRequestValidator : AbstractValidator<ResetPasswordRequest>
-{
-    public ResetPasswordRequestValidator()
-    {
-        RuleFor(x => x.Email).NotEmpty().EmailAddress();
-        RuleFor(x => x.Token).NotEmpty().MaximumLength(512);
-        RuleFor(x => x.NewPassword).SetValidator(new PasswordValidator());
-    }
+    public RefreshTokenRequestValidator() =>
+        RuleFor(x => x.RefreshToken).NotEmpty().MaximumLength(512);
 }
 
 public sealed class ChangePasswordRequestValidator : AbstractValidator<ChangePasswordRequest>
@@ -87,18 +130,20 @@ public sealed class ChangePasswordRequestValidator : AbstractValidator<ChangePas
     {
         RuleFor(x => x.CurrentPassword).NotEmpty().MaximumLength(128);
         RuleFor(x => x.NewPassword).SetValidator(new PasswordValidator());
-        RuleFor(x => x.NewPassword).NotEqual(x => x.CurrentPassword).WithMessage("New password must differ from the current password.");
+        RuleFor(x => x.NewPassword)
+            .NotEqual(x => x.CurrentPassword)
+            .WithMessage("New password must differ from the current password.");
     }
 }
 
 internal sealed class PasswordValidator : AbstractValidator<string>
 {
-    public PasswordValidator()
-    {
-        RuleFor(x => x).NotEmpty().MinimumLength(12).MaximumLength(128)
-            .Matches("[A-Z]").WithMessage("Password must contain an uppercase letter.")
-            .Matches("[a-z]").WithMessage("Password must contain a lowercase letter.")
-            .Matches("[0-9]").WithMessage("Password must contain a number.")
-            .Matches("[^a-zA-Z0-9]").WithMessage("Password must contain a special character.");
-    }
+    public PasswordValidator() =>
+        RuleFor(x => x).NotEmpty().MinimumLength(6).MaximumLength(128);
+}
+
+file static class OtpValidation
+{
+    public static bool IsValid(string value) =>
+        value is { Length: 6 } && value.All(character => character is >= '0' and <= '9');
 }

@@ -30,6 +30,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         builder.Property(x => x.LastName).HasMaxLength(100).IsRequired();
         builder.Property(x => x.PhoneNumber).HasMaxLength(32);
         builder.Property(x => x.NormalizedPhoneNumber).HasMaxLength(13);
+        builder.Property(x => x.TermsAndPrivacyVersion).HasMaxLength(32);
         builder.Property(x => x.ProfileImageUrl).HasMaxLength(2048);
         builder.Property(x => x.Headline).HasMaxLength(250);
         builder.Property(x => x.Bio).HasMaxLength(4000);
@@ -105,6 +106,7 @@ public sealed class CompanyConfiguration : IEntityTypeConfiguration<Company>
         builder.Property(x => x.LogoUrl).HasMaxLength(2048);
         builder.Property(x => x.Industry).HasMaxLength(150);
         builder.Property(x => x.Location).HasMaxLength(250);
+        builder.HasIndex(x => new { x.CompanyType, x.Industry });
         builder.HasIndex(x => x.Slug).IsUnique().HasFilter("[IsDeleted] = 0");
         builder.HasIndex(x => x.OwnerUserId);
         builder.HasOne(x => x.OwnerUser).WithMany(x => x.OwnedCompanies).HasForeignKey(x => x.OwnerUserId).OnDelete(DeleteBehavior.Restrict);
@@ -130,7 +132,12 @@ public sealed class JobConfiguration : IEntityTypeConfiguration<Job>
 {
     public void Configure(EntityTypeBuilder<Job> builder)
     {
-        builder.ToTable("Jobs", table => table.HasCheckConstraint("CK_Jobs_SalaryRange", "[MinimumSalary] IS NULL OR [MaximumSalary] IS NULL OR [MinimumSalary] <= [MaximumSalary]"));
+        builder.ToTable("Jobs", table =>
+        {
+            table.HasCheckConstraint("CK_Jobs_SalaryRange", "[MinimumSalary] IS NULL OR [MaximumSalary] IS NULL OR [MinimumSalary] <= [MaximumSalary]");
+            table.HasCheckConstraint("CK_Jobs_ExperienceRange", "[MinimumExperienceYears] IS NULL OR [MaximumExperienceYears] IS NULL OR [MinimumExperienceYears] <= [MaximumExperienceYears]");
+            table.HasCheckConstraint("CK_Jobs_InternshipDuration", "[InternshipDurationMonths] IS NULL OR [InternshipDurationMonths] IN (1, 2, 3, 6)");
+        });
         builder.ConfigureBaseEntity();
         builder.Property(x => x.ReferenceNumber).HasMaxLength(50).IsRequired();
         builder.Property(x => x.Title).HasMaxLength(250).IsRequired();
@@ -144,12 +151,19 @@ public sealed class JobConfiguration : IEntityTypeConfiguration<Job>
         builder.Property(x => x.MinimumSalary).HasPrecision(18, 2);
         builder.Property(x => x.MaximumSalary).HasPrecision(18, 2);
         builder.Property(x => x.CurrencyCode).HasMaxLength(3).IsFixedLength().IsRequired();
+        builder.Property(x => x.Department).HasMaxLength(150);
+        builder.Property(x => x.RoleCategory).HasMaxLength(150);
+        builder.Property(x => x.EducationRequirement).HasMaxLength(200);
         builder.HasIndex(x => x.ReferenceNumber).IsUnique().HasFilter("[IsDeleted] = 0");
         builder.HasIndex(x => x.Slug).IsUnique().HasFilter("[IsDeleted] = 0");
         builder.HasIndex(x => new { x.CompanyId, x.Status, x.PublishedAtUtc });
         builder.HasIndex(x => new { x.CategoryId, x.Status });
         builder.HasIndex(x => new { x.Status, x.IsFeatured, x.IsHidden, x.PublishedAtUtc });
         builder.HasIndex(x => new { x.Status, x.ExpiresAtUtc });
+        builder.HasIndex(x => new { x.Status, x.WorkplaceType, x.EmploymentType });
+        builder.HasIndex(x => new { x.Status, x.PostedByType });
+        builder.HasIndex(x => x.Department);
+        builder.HasIndex(x => x.RoleCategory);
         builder.HasIndex(x => x.ExpiresAtUtc);
         builder.HasIndex(x => x.CreatedAtUtc);
         builder.HasOne(x => x.Company).WithMany(x => x.Jobs).HasForeignKey(x => x.CompanyId).OnDelete(DeleteBehavior.Restrict);
@@ -358,8 +372,14 @@ public sealed class NotificationConfiguration : IEntityTypeConfiguration<Notific
         builder.Property(x => x.Title).HasMaxLength(250).IsRequired();
         builder.Property(x => x.Message).HasMaxLength(4000).IsRequired();
         builder.Property(x => x.ActionUrl).HasMaxLength(2048);
+
+        // ✅ We add an index to speed up queries filtering by read time
         builder.HasIndex(x => new { x.UserId, x.IsRead, x.CreatedAtUtc });
-        builder.HasOne(x => x.User).WithMany(x => x.Notifications).HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasOne(x => x.User)
+            .WithMany(u => u.Notifications)
+            .HasForeignKey(x => x.UserId)
+            .OnDelete(DeleteBehavior.Restrict);
     }
 }
 

@@ -13,6 +13,8 @@ public sealed class User : BaseEntity
     public string? PhoneNumber { get; set; }
     public string? NormalizedPhoneNumber { get; set; }
     public DateTime? TermsAndPrivacyAcceptedAtUtc { get; set; }
+    public string? TermsAndPrivacyVersion { get; set; }
+    public bool PhoneConfirmed { get; set; }
     public string? ProfileImageUrl { get; set; }
     public string? Headline { get; set; }
     public string? Bio { get; set; }
@@ -56,4 +58,5 @@ public sealed class User : BaseEntity
     public ICollection<AuditLog> AuditLogs { get; set; } = new List<AuditLog>();
     public ICollection<Setting> Settings { get; set; } = new List<Setting>();
     public ICollection<JobApplication> JobApplications { get; set; } = new List<JobApplication>();
+    public ICollection<OtpChallenge> OtpChallenges { get; set; } = new List<OtpChallenge>();
 }

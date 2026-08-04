@@ -104,6 +104,8 @@ public sealed class CandidateController(ICandidateService candidates) : Controll
     }
 
     [HttpPost("jobs/{jobId:guid}/applications")]
+    [ProducesResponseType(typeof(ApiResponse<JobApplicationResponse>), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApplicationQuotaLimitErrorResponse), StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<ApiResponse<JobApplicationResponse>>> Apply(
         Guid jobId, CreateJobApplicationRequest request, CancellationToken cancellationToken)
     {

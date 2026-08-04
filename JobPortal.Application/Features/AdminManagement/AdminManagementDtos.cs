@@ -1,3 +1,4 @@
+using JobPortal.Domain.Enums;
 using JobPortal.Shared.Models;
 
 namespace JobPortal.Application.Features.AdminManagement;
@@ -10,14 +11,17 @@ public sealed record CompanySearchQuery(
     string SortBy = "createdAt", string SortDirection = "desc");
 public sealed record CreateCompanyRequest(
     string Name, string? Slug, string? Description, string? WebsiteUrl,
-    string? LogoUrl, string? Industry, string? Location, int? EmployeeCount, bool IsVerified);
+    string? LogoUrl, string? Industry, string? Location, int? EmployeeCount, bool IsVerified,
+    CompanyType? CompanyType = null);
 public sealed record UpdateCompanyRequest(
     string Name, string? Slug, string? Description, string? WebsiteUrl,
-    string? LogoUrl, string? Industry, string? Location, int? EmployeeCount, bool IsVerified);
+    string? LogoUrl, string? Industry, string? Location, int? EmployeeCount, bool IsVerified,
+    CompanyType? CompanyType = null);
 public sealed record CompanyResponse(
     Guid Id, string Name, string Slug, string? Description, string? WebsiteUrl,
     string? LogoUrl, string? Industry, string? Location, int? EmployeeCount,
-    bool IsVerified, DateTime CreatedAtUtc, DateTime? UpdatedAtUtc, bool IsDeleted);
+    bool IsVerified, DateTime CreatedAtUtc, DateTime? UpdatedAtUtc, bool IsDeleted,
+    CompanyType? CompanyType = null);
 
 public sealed record CategorySearchQuery(
     int PageNumber = 1, int PageSize = 20, string? Search = null,

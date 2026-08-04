@@ -26,6 +26,8 @@ public sealed class CandidateService(
     TimeProvider timeProvider) : ICandidateService
 {
     private const long MaximumResumeBytes = 5 * 1024 * 1024;
+    private const int FreeMonthlyApplicationLimit = 10;
+    private const int PremiumDailyApplicationLimit = 35;
     private static readonly Dictionary<string, string[]> AllowedResumeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         [".pdf"] = ["application/pdf"],
@@ -180,6 +182,17 @@ public sealed class CandidateService(
         if (await dashboard.IsJobSavedAsync(userId, jobId, cancellationToken)) return;
         var savedJob = new SavedJob { UserId = userId, JobId = jobId };
         await dashboard.AddSavedJobAsync(savedJob, cancellationToken);
+
+        // 🚀 ADD NOTIFICATION HERE
+        await CreateNotificationAsync(
+            userId,
+            "Job Saved",
+            "You have successfully saved this job to your list.",
+            NotificationType.Profile,
+            "/dashboard/saved-jobs",
+            cancellationToken
+        );
+
         await auditWriter.AppendAsync(new(
             AuditAction.Create,
             "SavedJob",
@@ -188,7 +201,6 @@ public sealed class CandidateService(
             new(userId, "Candidate")), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
     }
-
     public async Task RemoveSavedJobAsync(Guid userId, Guid jobId, CancellationToken cancellationToken = default)
     {
         await RequiredCandidateAsync(userId, cancellationToken);
@@ -313,7 +325,10 @@ public sealed class CandidateService(
 
         if (usage.UsedApplications >= quota.Limit)
         {
-            throw new ConflictException(quota.ExhaustedMessage);
+            throw new ApplicationQuotaExceededException(
+                quota.LimitExceededCode,
+                quota.ExhaustedMessage,
+                quota.RedirectToMembership);
         }
 
         usage.UsedApplications++;
@@ -511,20 +526,20 @@ public sealed class CandidateService(
             startsIndia = indiaNow.Date;
             endsIndia = startsIndia.AddDays(1);
             period = ApplicationQuotaPeriod.PremiumDaily;
-            limit = 35;
+            limit = PremiumDailyApplicationLimit;
             exhaustedMessage =
-                "You have reached today's limit of 35 job applications. " +
-                "Your limit resets at 12:00 AM tomorrow (IST).";
+                $"You've reached today's application limit of {PremiumDailyApplicationLimit} jobs. " +
+                "Please try again tomorrow.";
         }
         else
         {
             startsIndia = new DateTime(indiaNow.Year, indiaNow.Month, 1);
             endsIndia = startsIndia.AddMonths(1);
             period = ApplicationQuotaPeriod.FreeMonthly;
-            limit = 10;
+            limit = FreeMonthlyApplicationLimit;
             exhaustedMessage =
-                "You have used all 10 free job applications for this month. " +
-                "Upgrade to Premium for up to 35 applications per day.";
+                $"You've reached your monthly application limit of {FreeMonthlyApplicationLimit} jobs. " +
+                "Upgrade to Premium for more applications.";
         }
 
         return new ApplicationQuotaWindow(
@@ -532,7 +547,9 @@ public sealed class CandidateService(
             TimeZoneInfo.ConvertTimeToUtc(startsIndia, indiaTimeZone),
             TimeZoneInfo.ConvertTimeToUtc(endsIndia, indiaTimeZone),
             limit,
-            exhaustedMessage);
+            hasPremiumMembership ? "DAILY_JOB_LIMIT_REACHED" : "MONTHLY_JOB_LIMIT_REACHED",
+            exhaustedMessage,
+            !hasPremiumMembership);
     }
 
     private static TimeZoneInfo GetIndiaTimeZone()
@@ -546,11 +563,34 @@ public sealed class CandidateService(
             return TimeZoneInfo.FindSystemTimeZoneById("Asia/Kolkata");
         }
     }
+    // 🚀 ADD THIS HELPER METHOD
+    private async Task CreateNotificationAsync(
+        Guid userId,
+        string title,
+        string message,
+        NotificationType type,
+        string? actionUrl = null,
+        CancellationToken cancellationToken = default)
+    {
+        var notification = new Notification
+        {
+            UserId = userId,
+            Title = title,
+            Message = message,
+            Type = type,
+            ActionUrl = actionUrl,
+            IsRead = false,
+            CreatedAtUtc = UtcNow
+        };
 
+        await dashboard.AddNotificationAsync(notification, cancellationToken);
+    }
     private sealed record ApplicationQuotaWindow(
         ApplicationQuotaPeriod Period,
         DateTime StartsAtUtc,
         DateTime EndsAtUtc,
         int Limit,
-        string ExhaustedMessage);
+        string LimitExceededCode,
+        string ExhaustedMessage,
+        bool RedirectToMembership);
 }

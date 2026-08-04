@@ -65,3 +65,9 @@ public sealed record ApplicationQuotaResponse(
     int UsedApplications,
     int RemainingApplications,
     DateTime ResetsAtUtc);
+
+public sealed record ApplicationQuotaLimitErrorResponse(
+    bool Success,
+    string Code,
+    string Message,
+    bool RedirectToMembership);

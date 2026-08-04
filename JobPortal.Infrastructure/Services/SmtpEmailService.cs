@@ -24,16 +24,61 @@ public sealed class SmtpEmailService(
             new EventId(1002, nameof(DeliveryFailed)),
             "Transactional email delivery failed for message type {MessageType}.");
 
+    private static readonly Action<ILogger, Exception?> PasswordResetUrlInvalid =
+        LoggerMessage.Define(
+            LogLevel.Error,
+            new EventId(1003, nameof(PasswordResetUrlInvalid)),
+            "Password reset email delivery failed because the configured reset URL is invalid.");
+
     public Task<EmailDeliveryResult> SendPasswordResetAsync(
         User user,
-        string resetToken,
-        CancellationToken cancellationToken = default) =>
-        SendAsync(
+        string rawToken,
+        CancellationToken cancellationToken = default)
+    {
+        var configuredUrl = configuration["Email:PasswordResetUrl"];
+        var resetUrl = BuildPasswordResetUrl(
+            configuredUrl,
             user.Email,
-            "Reset your Job Portal password",
-            $"Reset your password within 30 minutes using this secure link: {BuildPasswordResetUrl(user.Email, resetToken)}",
+            rawToken);
+        if (resetUrl is null)
+        {
+            PasswordResetUrlInvalid(logger, null);
+            return Task.FromResult(EmailDeliveryResult.Failed);
+        }
+
+        var safeFirstName = user.FirstName.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+        return SendAsync(
+            user.Email,
+            "Reset your Career Portal password",
+            $"Hello {safeFirstName},{Environment.NewLine}{Environment.NewLine}" +
+            "Use the secure link below to reset your Career Portal password. " +
+            $"The link expires in 30 minutes.{Environment.NewLine}{Environment.NewLine}" +
+            $"{resetUrl.AbsoluteUri}{Environment.NewLine}{Environment.NewLine}" +
+            "If you did not request this change, you can ignore this email.",
             "password-reset",
             cancellationToken);
+    }
+
+    internal static Uri? BuildPasswordResetUrl(
+        string? configuredUrl,
+        string email,
+        string rawToken)
+    {
+        if (!Uri.TryCreate(configuredUrl, UriKind.Absolute, out var resetUrl) ||
+            (resetUrl.Scheme != Uri.UriSchemeHttp &&
+                resetUrl.Scheme != Uri.UriSchemeHttps))
+            return null;
+
+        var resetUrlBuilder = new UriBuilder(resetUrl);
+        var existingQuery = resetUrlBuilder.Query.TrimStart('?');
+        var resetParameters =
+            $"email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(rawToken)}";
+        resetUrlBuilder.Query = string.IsNullOrEmpty(existingQuery)
+            ? resetParameters
+            : $"{existingQuery}&{resetParameters}";
+        return resetUrlBuilder.Uri;
+    }
 
     public Task<EmailDeliveryResult> SendApplicationStatusAsync(
         User user,
@@ -109,16 +154,4 @@ public sealed class SmtpEmailService(
         }
     }
 
-    private string BuildPasswordResetUrl(string email, string token)
-    {
-        const string configurationKey = "Email:PasswordResetUrl";
-
-        var baseUrl = configuration[configurationKey]
-            ?? throw new InvalidOperationException(
-                $"{configurationKey} is not configured.");
-
-        var separator = baseUrl.Contains('?', StringComparison.Ordinal) ? '&' : '?';
-
-        return $"{baseUrl}{separator}email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(token)}";
-    }
 }

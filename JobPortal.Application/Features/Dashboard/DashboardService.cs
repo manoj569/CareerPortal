@@ -87,6 +87,17 @@ public sealed class DashboardService(
         if (await dashboard.IsJobSavedAsync(userId, jobId, cancellationToken)) return;
         var savedJob = new SavedJob { UserId = userId, JobId = jobId };
         await dashboard.AddSavedJobAsync(savedJob, cancellationToken);
+
+        // 🚀 ADDED: Generate a Notification for saving the job
+        await CreateNotificationAsync(
+            userId,
+            "Job Saved",
+            "You have successfully saved this job to your list.",
+            JobPortal.Domain.Enums.NotificationType.Profile,
+            "/dashboard/saved-jobs",
+            cancellationToken
+        );
+
         await auditWriter.AppendAsync(new(
             JobPortal.Domain.Enums.AuditAction.Create,
             "SavedJob",
@@ -143,6 +154,29 @@ public sealed class DashboardService(
     public Task ChangePasswordAsync(
         Guid userId, ChangePasswordRequest request, CancellationToken cancellationToken = default) =>
         authService.ChangePasswordAsync(userId, request, cancellationToken);
+
+    // 🚀 ADDED: Helper method to create new notifications
+    private async Task CreateNotificationAsync(
+        Guid userId,
+        string title,
+        string message,
+        JobPortal.Domain.Enums.NotificationType type,
+        string? actionUrl = null,
+        CancellationToken cancellationToken = default)
+    {
+        var notification = new Notification
+        {
+            UserId = userId,
+            Title = title,
+            Message = message,
+            Type = type,
+            ActionUrl = actionUrl,
+            IsRead = false,
+            CreatedAtUtc = UtcNow
+        };
+
+        await dashboard.AddNotificationAsync(notification, cancellationToken);
+    }
 
     private async Task<User> RequiredUserAsync(Guid userId, CancellationToken cancellationToken) =>
         await dashboard.GetUserAsync(userId, cancellationToken) ?? throw new UnauthorizedException();

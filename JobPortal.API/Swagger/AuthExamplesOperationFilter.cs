@@ -14,11 +14,20 @@ public sealed class AuthExamplesOperationFilter : IOperationFilter
         mediaType.Example = context.MethodInfo.Name switch
         {
             "Register" => Registration(),
-            "Login" => Object(("email", "candidate@example.com"), ("password", "Str0ng!Password2026")),
+            "VerifyRegistrationOtp" => Object(("challengeId", Guid.Empty.ToString()), ("otp", "000000")),
+            "ResendRegistrationOtp" => Object(("challengeId", Guid.Empty.ToString())),
+            "Login" => Object(("identifier", "candidate@example.com"), ("password", "abc123")),
+            "RequestLoginOtp" => Object(("phoneNumber", "9876543210")),
+            "RequestPasswordReset" => Object(("email", "user@example.com")),
+            "LoginWithOtp" =>
+                Object(("phoneNumber", "9876543210"), ("otp", "000000")),
+            "CompletePasswordReset" => Object(
+                ("email", "user@example.com"),
+                ("token", "Password reset token from the email link"),
+                ("newPassword", "abc123"),
+                ("confirmPassword", "abc123")),
             "Refresh" or "Logout" => Object(("refreshToken", "Base64 refresh token")),
-            "ForgotPassword" => Object(("email", "candidate@example.com")),
-            "ResetPassword" => Object(("email", "candidate@example.com"), ("token", "reset-token-from-email"), ("newPassword", "N3w!StrongerPassword")),
-            "ChangePassword" => Object(("currentPassword", "Str0ng!Password2026"), ("newPassword", "N3w!StrongerPassword")),
+            "ChangePassword" => Object(("currentPassword", "abc123"), ("newPassword", "newpass")),
             "CreateOrder" => new OpenApiObject(),
             "Confirm" => Object(
                 ("razorpayOrderId", "order_test_example"),
@@ -41,11 +50,10 @@ public sealed class AuthExamplesOperationFilter : IOperationFilter
 
     private static OpenApiObject Registration() => new()
     {
-        ["email"] = new OpenApiString("candidate@example.com"),
-        ["password"] = new OpenApiString("Str0ng!Password2026"),
-        ["firstName"] = new OpenApiString("Avery"),
-        ["lastName"] = new OpenApiString("Patel"),
-        ["phoneNumber"] = new OpenApiString("+919876543210"),
+        ["fullName"] = new OpenApiString("Manoj Shekapure"),
+        ["email"] = new OpenApiString("user@example.com"),
+        ["password"] = new OpenApiString("abc123"),
+        ["phoneNumber"] = new OpenApiString("9876543210"),
         ["hasAcceptedTermsAndPrivacy"] = new OpenApiBoolean(true)
     };
 

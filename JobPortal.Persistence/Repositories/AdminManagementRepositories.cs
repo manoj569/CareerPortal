@@ -54,7 +54,7 @@ public sealed class CompanyManagementRepository(JobPortalDbContext context) : IC
     private static IQueryable<CompanyResponse> Project(IQueryable<Company> source) =>
         source.Select(x => new CompanyResponse(x.Id, x.Name, x.Slug, x.Description, x.WebsiteUrl,
             x.LogoUrl, x.Industry, x.Location, x.EmployeeCount, x.IsVerified,
-            x.CreatedAtUtc, x.UpdatedAtUtc, x.IsDeleted));
+            x.CreatedAtUtc, x.UpdatedAtUtc, x.IsDeleted, x.CompanyType));
 
     private static IQueryable<Company> Sort(IQueryable<Company> source, string field, bool descending) =>
         (field.ToLowerInvariant(), descending) switch

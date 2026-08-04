@@ -11,6 +11,14 @@ public sealed class UnauthorizedException(string message = "Authentication faile
 public sealed class NotFoundException(string message) : AppException(message, 404, "not_found");
 public sealed class ConflictException(string message) : AppException(message, 409, "conflict");
 
+public sealed class ApplicationQuotaExceededException(
+    string code,
+    string message,
+    bool redirectToMembership) : AppException(message, 403, code)
+{
+    public bool RedirectToMembership { get; } = redirectToMembership;
+}
+
 public sealed class UniqueConstraintException(
     string message,
     Exception? innerException = null) : Exception(message, innerException);

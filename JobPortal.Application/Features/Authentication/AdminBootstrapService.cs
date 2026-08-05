@@ -34,11 +34,10 @@ public sealed class AdminBootstrapService(
         {
             await registerValidator.ValidateAndThrowAsync(
                 new RegisterRequest(
+                    $"{firstName} {lastName}",
                     email,
                     password,
-                    firstName,
-                    lastName,
-                    "+919876543210",
+                    "9876543210",
                     true),
                 cancellationToken);
         }
@@ -48,7 +47,7 @@ public sealed class AdminBootstrapService(
                 "BootstrapAdmin configuration does not satisfy the account validation rules.", exception);
         }
 
-        var normalizedEmail = email.Trim().ToUpperInvariant();
+        var normalizedEmail = email.Trim().ToLowerInvariant();
         var existing = await users.GetByNormalizedEmailAsync(normalizedEmail, cancellationToken);
         if (existing is not null)
         {

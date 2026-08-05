@@ -37,7 +37,8 @@ public sealed class CompanyManagementService(
         await EnsureUniqueSlugAsync(slug, null, cancellationToken);
         var company = new Company { OwnerUserId = administratorUserId };
         Apply(company, request.Name, slug, request.Description, request.WebsiteUrl, request.LogoUrl,
-            request.Industry, request.Location, request.EmployeeCount, request.IsVerified);
+            request.Industry, request.Location, request.EmployeeCount, request.IsVerified,
+            request.CompanyType);
         await companies.AddAsync(company, cancellationToken);
         await auditWriter.AppendAsync(new(
             AuditAction.Create,
@@ -56,7 +57,8 @@ public sealed class CompanyManagementService(
         var slug = RequiredSlug(request.Slug, request.Name);
         await EnsureUniqueSlugAsync(slug, id, cancellationToken);
         Apply(company, request.Name, slug, request.Description, request.WebsiteUrl, request.LogoUrl,
-            request.Industry, request.Location, request.EmployeeCount, request.IsVerified);
+            request.Industry, request.Location, request.EmployeeCount, request.IsVerified,
+            request.CompanyType);
         await auditWriter.AppendAsync(new(
             AuditAction.Update, "Company", company.Id.ToString()), cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
@@ -93,7 +95,7 @@ public sealed class CompanyManagementService(
 
     private static void Apply(Company company, string name, string slug, string? description,
         string? websiteUrl, string? logoUrl, string? industry, string? location,
-        int? employeeCount, bool isVerified)
+        int? employeeCount, bool isVerified, CompanyType? companyType)
     {
         company.Name = name.Trim();
         company.Slug = slug;
@@ -104,6 +106,7 @@ public sealed class CompanyManagementService(
         company.Location = TextNormalizer.TrimOrNull(location);
         company.EmployeeCount = employeeCount;
         company.IsVerified = isVerified;
+        company.CompanyType = companyType;
     }
 }
 

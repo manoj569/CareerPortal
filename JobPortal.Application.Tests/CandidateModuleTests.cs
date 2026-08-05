@@ -1,4 +1,5 @@
 using System.Text.Json;
+using JobPortal.API.Middleware;
 using JobPortal.Application.Abstractions.Candidates;
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
@@ -7,6 +8,8 @@ using JobPortal.Application.Features.Dashboard;
 using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
 namespace JobPortal.Application.Tests;
@@ -52,6 +55,38 @@ public sealed class CandidateModuleTests
         Assert.Equal(
             JobApplicationStatus.Submitted,
             application.Status);
+    }
+
+    [Fact]
+    public async Task ApplicationQuotaReportsFreeMonthlyAllowance()
+    {
+        var fixture = CreateFixture();
+        fixture.Repository.HasMembership = false;
+
+        var response = await fixture.Service.GetApplicationQuotaAsync(fixture.Candidate.Id);
+
+        Assert.Equal("Free", response.Plan);
+        Assert.False(response.IsPremium);
+        Assert.Equal(10, response.Limit);
+        Assert.Equal(0, response.UsedApplications);
+        Assert.Equal(10, response.RemainingApplications);
+        Assert.True(response.ResetsAtUtc > Now);
+    }
+
+    [Fact]
+    public async Task ApplicationQuotaReportsPremiumDailyAllowance()
+    {
+        var fixture = CreateFixture();
+        fixture.Repository.HasMembership = true;
+
+        var response = await fixture.Service.GetApplicationQuotaAsync(fixture.Candidate.Id);
+
+        Assert.Equal("Premium", response.Plan);
+        Assert.True(response.IsPremium);
+        Assert.Equal(35, response.Limit);
+        Assert.Equal(0, response.UsedApplications);
+        Assert.Equal(35, response.RemainingApplications);
+        Assert.True(response.ResetsAtUtc > Now);
     }
 
     [Theory]
@@ -165,17 +200,243 @@ public sealed class CandidateModuleTests
     }
 
     [Fact]
-    public async Task ApplicationRequiresMembershipAndAvailableJob()
+    public async Task FreeCandidateCanApplyWhenBelowMonthlyLimit()
     {
         var fixture = CreateFixture();
         fixture.Repository.HasMembership = false;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new(null));
+
+        Assert.Single(fixture.Repository.AddedApplications);
+
+        fixture = CreateFixture();
+        fixture.Repository.AvailableJob = null;
+
+        await Assert.ThrowsAsync<NotFoundException>(() =>
+            fixture.Service.ApplyAsync(
+                fixture.Candidate.Id,
+                fixture.Job.Id,
+                new(null)));
+    }
+    [Fact]
+    public async Task FreeCandidateAtMonthlyLimitCannotCreateAnEleventhApplication()
+    {
+        var fixture = CreateFixture();
+        fixture.Repository.HasMembership = false;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("First application"));
+
+        var usage = Assert.Single(fixture.Repository.AddedQuotaUsages);
+
+        Assert.Equal(ApplicationQuotaPeriod.FreeMonthly, usage.Period);
+        Assert.Equal(1, usage.UsedApplications);
+
+        usage.UsedApplications = 9;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("Tenth application"));
+
+        Assert.Equal(10, usage.UsedApplications);
+
+        var exception = await Assert.ThrowsAsync<ApplicationQuotaExceededException>(() =>
+            fixture.Service.ApplyAsync(
+                fixture.Candidate.Id,
+                fixture.Job.Id,
+                new("Another application")));
+
+        Assert.Equal("MONTHLY_JOB_LIMIT_REACHED", exception.Code);
+        Assert.True(exception.RedirectToMembership);
+        Assert.Equal(
+            "You've reached your monthly application limit of 10 jobs. Upgrade to Premium for more applications.",
+            exception.Message);
+        Assert.Equal(2, fixture.Repository.AddedApplications.Count);
+    }
+
+    [Fact]
+    public async Task PremiumCandidateCanApplyWhenBelowDailyLimit()
+    {
+        var fixture = CreateFixture();
+        fixture.Repository.HasMembership = true;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("First application"));
+
+        Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal(1, Assert.Single(fixture.Repository.AddedQuotaUsages).UsedApplications);
+    }
+
+    [Fact]
+    public async Task PremiumCandidateAtDailyLimitCannotCreateAThirtySixthApplication()
+    {
+        var fixture = CreateFixture();
+        fixture.Repository.HasMembership = true;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("First application"));
+
+        var usage = Assert.Single(fixture.Repository.AddedQuotaUsages);
+
+        Assert.Equal(ApplicationQuotaPeriod.PremiumDaily, usage.Period);
+        Assert.Equal(1, usage.UsedApplications);
+
+        usage.UsedApplications = 34;
+
+        await fixture.Service.ApplyAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id,
+            new("Thirty-fifth application"));
+
+        Assert.Equal(35, usage.UsedApplications);
+
+        var exception = await Assert.ThrowsAsync<ApplicationQuotaExceededException>(() =>
+            fixture.Service.ApplyAsync(
+                fixture.Candidate.Id,
+                fixture.Job.Id,
+                new("Another application")));
+
+        Assert.Equal("DAILY_JOB_LIMIT_REACHED", exception.Code);
+        Assert.False(exception.RedirectToMembership);
+        Assert.Equal(
+            "You've reached today's application limit of 35 jobs. Please try again tomorrow.",
+            exception.Message);
+        Assert.Equal(2, fixture.Repository.AddedApplications.Count);
+    }
+
+    [Fact]
+    public async Task FreeMonthlyQuotaResetsForANewCalendarMonth()
+    {
+        var fixture = CreateFixture(new DateTime(2026, 8, 1, 0, 0, 0, DateTimeKind.Utc));
+        fixture.Repository.HasMembership = false;
+        fixture.Repository.AddedQuotaUsages.Add(new ApplicationQuotaUsage
+        {
+            UserId = fixture.Candidate.Id,
+            Period = ApplicationQuotaPeriod.FreeMonthly,
+            PeriodStartsAtUtc = new DateTime(2026, 6, 30, 18, 30, 0, DateTimeKind.Utc),
+            PeriodEndsAtUtc = new DateTime(2026, 7, 31, 18, 30, 0, DateTimeKind.Utc),
+            UsedApplications = 10
+        });
+
+        await fixture.Service.ApplyAsync(fixture.Candidate.Id, fixture.Job.Id, new(null));
+
+        Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal(2, fixture.Repository.AddedQuotaUsages.Count);
+        Assert.Equal(1, fixture.Repository.AddedQuotaUsages.Single(usage =>
+            usage.PeriodStartsAtUtc == new DateTime(2026, 7, 31, 18, 30, 0, DateTimeKind.Utc))
+            .UsedApplications);
+    }
+
+    [Fact]
+    public async Task PremiumDailyQuotaResetsForANewCalendarDay()
+    {
+        var fixture = CreateFixture(new DateTime(2026, 8, 2, 18, 31, 0, DateTimeKind.Utc));
+        fixture.Repository.HasMembership = true;
+        fixture.Repository.AddedQuotaUsages.Add(new ApplicationQuotaUsage
+        {
+            UserId = fixture.Candidate.Id,
+            Period = ApplicationQuotaPeriod.PremiumDaily,
+            PeriodStartsAtUtc = new DateTime(2026, 8, 1, 18, 30, 0, DateTimeKind.Utc),
+            PeriodEndsAtUtc = new DateTime(2026, 8, 2, 18, 30, 0, DateTimeKind.Utc),
+            UsedApplications = 35
+        });
+
+        await fixture.Service.ApplyAsync(fixture.Candidate.Id, fixture.Job.Id, new(null));
+
+        Assert.Single(fixture.Repository.AddedApplications);
+        Assert.Equal(2, fixture.Repository.AddedQuotaUsages.Count);
+        Assert.Equal(1, fixture.Repository.AddedQuotaUsages.Single(usage =>
+            usage.PeriodStartsAtUtc == new DateTime(2026, 8, 2, 18, 30, 0, DateTimeKind.Utc))
+            .UsedApplications);
+    }
+
+    [Fact]
+    public async Task QuotaExceededReturnsTheRequiredForbiddenResponse()
+    {
+        var context = new DefaultHttpContext();
+        await using var responseBody = new MemoryStream();
+        context.Response.Body = responseBody;
+        var middleware = new GlobalExceptionMiddleware(
+            _ => Task.FromException(new ApplicationQuotaExceededException(
+                "MONTHLY_JOB_LIMIT_REACHED",
+                "You've reached your monthly application limit of 10 jobs. Upgrade to Premium for more applications.",
+                true)),
+            NullLogger<GlobalExceptionMiddleware>.Instance);
+
+        await middleware.InvokeAsync(context);
+
+        responseBody.Position = 0;
+        var response = await JsonSerializer.DeserializeAsync<ApplicationQuotaLimitErrorResponse>(
+            responseBody,
+            WebJson);
+
+        Assert.Equal(StatusCodes.Status403Forbidden, context.Response.StatusCode);
+        Assert.NotNull(response);
+        Assert.False(response.Success);
+        Assert.Equal("MONTHLY_JOB_LIMIT_REACHED", response.Code);
+        Assert.True(response.RedirectToMembership);
+    }
+
+    [Fact]
+    public async Task RecruiterContactRequiresMembershipAndDoesNotWritePrivateDataToAudit()
+    {
+        var fixture = CreateFixture();
+
+        fixture.Repository.ApprovedRecruiterContact = new CandidateRecruiterContact(
+            fixture.Job.Id,
+            fixture.Job.Title,
+            fixture.Job.Slug,
+            "Example Co",
+            "Priya Sharma",
+            "Campus Recruiter",
+            "priya.sharma@example.test",
+            "+919876543210");
+
+        fixture.Repository.HasMembership = false;
+
         await Assert.ThrowsAsync<ConflictException>(() =>
-            fixture.Service.ApplyAsync(fixture.Candidate.Id, fixture.Job.Id, new(null)));
+            fixture.Service.GetRecruiterContactAsync(
+                fixture.Candidate.Id,
+                fixture.Job.Id));
 
         fixture.Repository.HasMembership = true;
-        fixture.Repository.AvailableJob = null;
+
+        var response = await fixture.Service.GetRecruiterContactAsync(
+            fixture.Candidate.Id,
+            fixture.Job.Id);
+
+        Assert.Equal("Priya Sharma", response.ContactName);
+        Assert.Equal("Campus Recruiter", response.ContactRole);
+        Assert.Equal("priya.sharma@example.test", response.Email);
+        Assert.Equal("+919876543210", response.PhoneNumber);
+
+        var auditJson = JsonSerializer.Serialize(Assert.Single(fixture.Audit.Events));
+
+        Assert.Contains("\"access\":\"membership\"", auditJson);
+        Assert.DoesNotContain(response.Email, auditJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(response.PhoneNumber!, auditJson, StringComparison.Ordinal);
+        Assert.DoesNotContain(response.ContactName, auditJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RecruiterContactIsUnavailableWhenNotApprovedOrNotPresent()
+    {
+        var fixture = CreateFixture();
+
         await Assert.ThrowsAsync<NotFoundException>(() =>
-            fixture.Service.ApplyAsync(fixture.Candidate.Id, fixture.Job.Id, new(null)));
+            fixture.Service.GetRecruiterContactAsync(
+                fixture.Candidate.Id,
+                fixture.Job.Id));
     }
 
     [Fact]
@@ -299,7 +560,7 @@ public sealed class CandidateModuleTests
         Assert.Equal(10, fixture.Repository.LastQuery.PageSize);
     }
 
-    private static Fixture CreateFixture()
+    private static Fixture CreateFixture(DateTime? nowUtc = null)
     {
         var candidate = new User
         {
@@ -330,7 +591,7 @@ public sealed class CandidateModuleTests
         var storage = new FakeResumeStorage();
         var unitOfWork = new FakeUnitOfWork();
         var audit = new AuditWriterTestDouble();
-        var timeProvider = new FixedTimeProvider(Now);
+        var timeProvider = new FixedTimeProvider(nowUtc ?? Now);
         var service = new CandidateService(
             repository, dashboard, storage, unitOfWork, audit,
             new UpdateCandidateProfileRequestValidator(),
@@ -365,6 +626,7 @@ public sealed class CandidateModuleTests
     {
         public User? Candidate { get; set; }
         public CandidateJob? AvailableJob { get; set; }
+        public CandidateRecruiterContact? ApprovedRecruiterContact { get; set; }
         public bool HasMembership { get; set; } = true;
         public bool HasPriorApplication { get; set; }
         public JobApplication? OwnedApplication { get; set; }
@@ -372,6 +634,7 @@ public sealed class CandidateModuleTests
         public HashSet<string> ReferencedResumeKeys { get; } = [];
         public Guid? ListedForUserId { get; private set; }
         public JobApplicationQuery? LastQuery { get; private set; }
+        public List<ApplicationQuotaUsage> AddedQuotaUsages { get; } = [];
 
         public Task<User?> GetCandidateAsync(Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult(
@@ -382,6 +645,13 @@ public sealed class CandidateModuleTests
                     : null);
         public Task<CandidateJob?> GetAvailableJobAsync(Guid jobId, CancellationToken cancellationToken = default) =>
             Task.FromResult(AvailableJob?.Id == jobId ? AvailableJob : null);
+        public Task<CandidateRecruiterContact?> GetApprovedRecruiterContactForAvailableJobAsync(
+    Guid jobId,
+    CancellationToken cancellationToken = default) =>
+    Task.FromResult(
+        ApprovedRecruiterContact?.JobId == jobId
+            ? ApprovedRecruiterContact
+            : null);
         public Task<bool> HasActiveMembershipAsync(Guid userId, CancellationToken cancellationToken = default) =>
             Task.FromResult(HasMembership);
         public Task<bool> IsResumeReferencedAsync(string storageKey, CancellationToken cancellationToken = default) =>
@@ -394,6 +664,24 @@ public sealed class CandidateModuleTests
         public Task<bool> HasApplicationAsync(
             Guid userId, Guid jobId, CancellationToken cancellationToken = default) =>
             Task.FromResult(HasPriorApplication);
+        public Task<ApplicationQuotaUsage?> GetQuotaUsageAsync(
+    Guid userId,
+    ApplicationQuotaPeriod period,
+    DateTime periodStartsAtUtc,
+    CancellationToken cancellationToken = default) =>
+    Task.FromResult(
+        AddedQuotaUsages.SingleOrDefault(usage =>
+            usage.UserId == userId &&
+            usage.Period == period &&
+            usage.PeriodStartsAtUtc == periodStartsAtUtc));
+
+        public Task AddQuotaUsageAsync(
+            ApplicationQuotaUsage quotaUsage,
+            CancellationToken cancellationToken = default)
+        {
+            AddedQuotaUsages.Add(quotaUsage);
+            return Task.CompletedTask;
+        }
         public Task AddApplicationAsync(
             JobApplication application, CancellationToken cancellationToken = default)
         {
@@ -445,8 +733,14 @@ public sealed class CandidateModuleTests
         public Task<int> MarkAllNotificationsReadAsync(
             Guid userId, DateTime readAtUtc, CancellationToken cancellationToken = default) =>
             Task.FromResult(0);
-    }
 
+        // 👇 ADD THIS MISSING METHOD IMPLEMENTATION
+        public Task AddNotificationAsync(Notification notification, CancellationToken cancellationToken = default)
+        {
+            // For unit tests, we just need it to succeed. We don't need to save it anywhere.
+            return Task.CompletedTask;
+        }
+    }
     private sealed class FakeResumeStorage : IResumeStorage
     {
         public List<string> Stored { get; } = [];

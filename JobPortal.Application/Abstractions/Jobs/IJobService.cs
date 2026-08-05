@@ -17,6 +17,14 @@ public interface IJobService
     Task<JobResponse> SetFeaturedAsync(Guid id, bool isFeatured, CancellationToken cancellationToken = default);
     Task<JobResponse> SetHiddenAsync(Guid id, bool isHidden, CancellationToken cancellationToken = default);
     Task<PagedResponse<JobResponse>> SearchAsync(JobSearchQuery query, CancellationToken cancellationToken = default);
+    Task<AdminRecruiterContactResponse> GetRecruiterContactAsync(
+    Guid jobId,
+    CancellationToken cancellationToken = default);
+
+    Task<AdminRecruiterContactResponse> UpdateRecruiterContactAsync(
+        Guid jobId,
+        UpdateRecruiterContactRequest request,
+        CancellationToken cancellationToken = default);
 }
 
 public interface IJobExpiryService

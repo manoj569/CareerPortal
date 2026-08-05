@@ -6,13 +6,29 @@ namespace JobPortal.Application.Abstractions.Authentication;
 
 public interface IAuthService
 {
-    Task<RegistrationResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken = default);
+    Task<RegistrationChallengeResponse> RegisterAsync(
+        RegisterRequest request, CancellationToken cancellationToken = default);
+    Task<RegistrationResponse> VerifyRegistrationOtpAsync(
+        VerifyRegistrationOtpRequest request,
+        CancellationToken cancellationToken = default);
+    Task<MessageResponse> ResendRegistrationOtpAsync(
+        ResendRegistrationOtpRequest request,
+        CancellationToken cancellationToken = default);
     Task<AuthenticationResponse> LoginAsync(LoginRequest request, string? ipAddress, CancellationToken cancellationToken = default);
-    //Task<VerificationResponse> VerifyEmailAsync(VerifyEmailRequest request, CancellationToken cancellationToken = default);
-    //Task<VerificationResponse> ResendVerificationAsync(ResendVerificationRequest request, CancellationToken cancellationToken = default);
+    Task<MessageResponse> RequestLoginOtpAsync(
+        RequestLoginOtpRequest request,
+        CancellationToken cancellationToken = default);
+    Task<AuthenticationResponse> LoginWithOtpAsync(
+        LoginWithOtpRequest request,
+        string? ipAddress,
+        CancellationToken cancellationToken = default);
+    Task<MessageResponse> RequestPasswordResetAsync(
+        RequestPasswordResetRequest request,
+        CancellationToken cancellationToken = default);
+    Task<MessageResponse> CompletePasswordResetAsync(
+        CompletePasswordResetRequest request,
+        CancellationToken cancellationToken = default);
     Task<AuthenticationResponse> RefreshAsync(RefreshTokenRequest request, string? ipAddress, CancellationToken cancellationToken = default);
-    Task ForgotPasswordAsync(ForgotPasswordRequest request, CancellationToken cancellationToken = default);
-    Task ResetPasswordAsync(ResetPasswordRequest request, CancellationToken cancellationToken = default);
     Task ChangePasswordAsync(Guid userId, ChangePasswordRequest request, CancellationToken cancellationToken = default);
     Task LogoutAsync(Guid userId, LogoutRequest request, string? ipAddress, CancellationToken cancellationToken = default);
 }
@@ -32,13 +48,38 @@ public interface IJwtTokenService
     string HashToken(string token);
 }
 
-//public interface IEmailService
-//{
-//    Task<EmailDeliveryResult> SendEmailVerificationAsync(User user, string verificationToken, CancellationToken cancellationToken = default);
-//    Task<EmailDeliveryResult> SendPasswordResetAsync(User user, string resetToken, CancellationToken cancellationToken = default);
-//    Task<EmailDeliveryResult> SendApplicationStatusAsync(
-//        User user, string jobTitle, JobApplicationStatus status,
-//        CancellationToken cancellationToken = default);
-//}
+public interface IEmailService
+{
+    Task<EmailDeliveryResult> SendPasswordResetAsync(
+        User user,
+        string rawToken,
+        CancellationToken cancellationToken = default);
+    Task<EmailDeliveryResult> SendApplicationStatusAsync(
+        User user, string jobTitle, JobApplicationStatus status,
+        CancellationToken cancellationToken = default);
+}
 
 public enum EmailDeliveryResult { Sent, Disabled, Failed }
+
+public interface IOneTimePasswordService
+{
+    string Generate();
+    string Hash(string otp);
+    bool Verify(string otp, string expectedHash);
+}
+
+public interface ISmsService
+{
+    Task<SmsDeliveryResult> SendOtpAsync(
+        string normalizedPhoneNumber,
+        string otp,
+        OtpPurpose purpose,
+        CancellationToken cancellationToken = default);
+}
+
+public enum SmsDeliveryResult { Sent, Disabled, Failed, TimedOut }
+
+public interface IApplicationShutdown
+{
+    CancellationToken ApplicationStopping { get; }
+}

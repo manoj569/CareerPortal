@@ -2,6 +2,15 @@ namespace JobPortal.Application.Common.Text;
 
 public static class IndianMobileNumber
 {
+    public static bool TryNormalizeTenDigit(string? value, out string normalized)
+    {
+        normalized = string.Empty;
+        if (value is not { Length: 10 } ||
+            value.Any(character => character is < '0' or > '9'))
+            return false;
+        return TryNormalize(value, out normalized);
+    }
+
     public static bool TryNormalize(string? value, out string normalized)
     {
         normalized = string.Empty;

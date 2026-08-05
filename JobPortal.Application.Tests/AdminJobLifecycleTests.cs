@@ -12,6 +12,7 @@ using JobPortal.Persistence.Context;
 using JobPortal.Persistence.Repositories;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
+using static JobPortal.Application.Features.Jobs.JobSearchQueryValidator;
 
 namespace JobPortal.Application.Tests;
 
@@ -192,9 +193,10 @@ public sealed class AdminJobLifecycleTests
             repository,
             new UnitOfWorkFake(),
             audit,
-            new CreateJobRequestValidator(),
-            new UpdateJobRequestValidator(),
-            new JobSearchQueryValidator(),
+          new CreateJobRequestValidator(),
+new UpdateJobRequestValidator(),
+new UpdateRecruiterContactRequestValidator(),
+new JobSearchQueryValidator(),
             new FixedTimeProvider(Now));
         return new(service, repository, job, audit);
     }
@@ -331,15 +333,21 @@ public sealed class JobLifecycleVisibilityTests
             new PublicJobQuery(PageSize: 100));
         var related = await repository.GetRelatedAsync(seed.Visible.Slug, 20);
 
-        Assert.Equal(2, totalCount);
+        Assert.Equal(3, totalCount);
         Assert.All(items, item =>
-            Assert.Contains(item.Id, new[] { seed.Visible.Id, seed.RelatedVisible.Id }));
-        Assert.Equal(seed.RelatedVisible.Id, Assert.Single(related).Id);
+            Assert.Contains(
+                item.Id,
+                new[] { seed.Visible.Id, seed.RelatedVisible.Id, seed.NoExpiry.Id }));
+        Assert.Equal(
+            new[] { seed.RelatedVisible.Id, seed.NoExpiry.Id }.Order(),
+            related.Select(item => item.Id).Order());
 
         var (featured, featuredCount) = await repository.SearchAsync(
             new PublicJobQuery(PageSize: 100, IsFeatured: true));
-        Assert.Equal(1, featuredCount);
-        Assert.Equal(seed.Visible.Id, Assert.Single(featured).Id);
+        Assert.Equal(2, featuredCount);
+        Assert.Equal(
+            new[] { seed.Visible.Id, seed.NoExpiry.Id }.Order(),
+            featured.Select(item => item.Id).Order());
     }
 
     [Fact]
@@ -364,13 +372,13 @@ public sealed class JobLifecycleVisibilityTests
         var (items, totalCount) = await repository.GetSavedJobsAsync(
             candidate.Id, new DashboardQuery(1, 100));
 
-        Assert.Equal(2, totalCount);
+        Assert.Equal(3, totalCount);
         Assert.All(items, item =>
             Assert.Contains(
                 item.Job.Id,
-                new[] { seed.Visible.Id, seed.RelatedVisible.Id }));
+                new[] { seed.Visible.Id, seed.RelatedVisible.Id, seed.NoExpiry.Id }));
         foreach (var unavailable in seed.All.Except(
-                     new[] { seed.Visible, seed.RelatedVisible }))
+                     new[] { seed.Visible, seed.RelatedVisible, seed.NoExpiry }))
             Assert.False(await repository.IsAvailableJobAsync(unavailable.Id));
     }
 
@@ -456,6 +464,7 @@ public sealed class JobLifecycleVisibilityTests
             expired,
             overdue,
             archived,
+            noExpiry,
             [visible, relatedVisible, closed, expired, overdue, archived, draft, noExpiry]);
     }
 
@@ -509,6 +518,7 @@ public sealed class JobLifecycleVisibilityTests
         Job Expired,
         Job Overdue,
         Job Archived,
+        Job NoExpiry,
         IReadOnlyCollection<Job> All);
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider

@@ -413,6 +413,10 @@ public sealed class PortalMembershipTests
         public Task<User?> GetByNormalizedEmailAsync(
             string normalizedEmail, CancellationToken cancellationToken = default) =>
             Task.FromResult<User?>(null);
+        public Task<User?> GetByNormalizedPhoneAsync(
+            string normalizedPhoneNumber,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<User?>(null);
         public Task<bool> RegistrationIdentityExistsAsync(
             string normalizedEmail, string normalizedPhoneNumber,
             CancellationToken cancellationToken = default) =>

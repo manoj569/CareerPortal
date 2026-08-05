@@ -16,8 +16,31 @@ public sealed record PublicJobQuery(
     decimal? MinimumSalary = null,
     decimal? MaximumSalary = null,
     bool? IsFeatured = null,
-    string SortBy = "publishedAt",
-    string SortDirection = "desc");
+    PublicJobSort SortBy = PublicJobSort.Recommended,
+    string SortDirection = "desc",
+    string? Keyword = null,
+    string[]? Locations = null,
+    WorkplaceType[]? WorkModes = null,
+    int? MinExperienceYears = null,
+    int? MaxExperienceYears = null,
+    string[]? Departments = null,
+    string[]? RoleCategories = null,
+    EmploymentType[]? EmploymentTypes = null,
+    decimal? MinAmount = null,
+    decimal? MaxAmount = null,
+    int[]? InternshipDurationMonths = null,
+    bool? FlexibleDuration = null,
+    string[]? EducationRequirements = null,
+    CompanyType[]? CompanyTypes = null,
+    Guid[]? CompanyIds = null,
+    string[]? Industries = null,
+    PostedByType[]? PostedByTypes = null,
+    int? FreshnessDays = null,
+    bool? FeaturedOnly = null,
+    int? Page = null)
+{
+    public int EffectivePageNumber => Page ?? PageNumber;
+}
 
 public sealed record PublicJobSummary(
     Guid Id, string ReferenceNumber, string Title, string Slug,
@@ -26,7 +49,11 @@ public sealed record PublicJobSummary(
     decimal? MinimumSalary, decimal? MaximumSalary, string CurrencyCode,
     EmploymentType EmploymentType, WorkplaceType WorkplaceType,
     ExperienceLevel ExperienceLevel, bool IsFeatured,
-    DateTime PublishedAtUtc, DateTime? ExpiresAtUtc);
+    DateTime PublishedAtUtc, DateTime? ExpiresAtUtc,
+    int? MinimumExperienceYears, int? MaximumExperienceYears,
+    int? InternshipDurationMonths, bool IsFlexibleDuration,
+    string? Department, string? RoleCategory, string? EducationRequirement,
+    PostedByType? PostedByType, CompanyType? CompanyType, string? Industry);
 
 public sealed record PublicJobDetails(
     Guid Id, string ReferenceNumber, string Title, string Slug, string Description,
@@ -37,10 +64,48 @@ public sealed record PublicJobDetails(
     decimal? MinimumSalary, decimal? MaximumSalary, string CurrencyCode,
     EmploymentType EmploymentType, WorkplaceType WorkplaceType,
     ExperienceLevel ExperienceLevel, bool IsFeatured,
-    DateTime PublishedAtUtc, DateTime? ExpiresAtUtc);
+    DateTime PublishedAtUtc, DateTime? ExpiresAtUtc,
+    int? MinimumExperienceYears, int? MaximumExperienceYears,
+    int? InternshipDurationMonths, bool IsFlexibleDuration,
+    string? Department, string? RoleCategory, string? EducationRequirement,
+    PostedByType? PostedByType, CompanyType? CompanyType, string? Industry,
+    string? ApplicationUrl = null);
 
 public sealed record PopularCompanyResponse(
     Guid Id, string Name, string Slug, string? LogoUrl, string? Industry,
     string? Location, bool IsVerified, int ActiveJobCount);
 
 public sealed record PublicJobPage(PagedResponse<PublicJobSummary> Page);
+
+public sealed record PublicJobSearchResponse(
+    IReadOnlyCollection<PublicJobSummary> Items,
+    int PageNumber,
+    int PageSize,
+    int TotalCount,
+    PublicJobSort AppliedSort)
+{
+    public int TotalPages => (int)Math.Ceiling(TotalCount / (double)PageSize);
+}
+
+public sealed record StringFacetOption(string Value, int Count);
+public sealed record EnumFacetOption<TEnum>(TEnum Value, int Count) where TEnum : struct, Enum;
+public sealed record CompanyFacetOption(Guid Id, string Name, int Count);
+public sealed record InternshipDurationFacetOption(
+    int? Months, bool IsFlexible, string Label, int Count);
+public sealed record DecimalRangeFacet(decimal? Minimum, decimal? Maximum, int Count);
+public sealed record IntegerRangeFacet(int? Minimum, int? Maximum, int Count);
+
+public sealed record PublicJobFilterOptionsResponse(
+    IReadOnlyCollection<StringFacetOption> Locations,
+    IReadOnlyCollection<EnumFacetOption<WorkplaceType>> WorkModes,
+    IReadOnlyCollection<StringFacetOption> Departments,
+    IReadOnlyCollection<StringFacetOption> RoleCategories,
+    IReadOnlyCollection<EnumFacetOption<EmploymentType>> EmploymentTypes,
+    IReadOnlyCollection<EnumFacetOption<CompanyType>> CompanyTypes,
+    IReadOnlyCollection<CompanyFacetOption> Companies,
+    IReadOnlyCollection<StringFacetOption> Industries,
+    IReadOnlyCollection<StringFacetOption> EducationRequirements,
+    IReadOnlyCollection<EnumFacetOption<PostedByType>> PostedByTypes,
+    IReadOnlyCollection<InternshipDurationFacetOption> InternshipDurations,
+    DecimalRangeFacet SalaryRange,
+    IntegerRangeFacet ExperienceRange);

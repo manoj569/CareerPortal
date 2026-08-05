@@ -12,7 +12,10 @@ public static class JobMappings
         job.Location, job.MinimumSalary, job.MaximumSalary, job.CurrencyCode,
         job.EmploymentType, job.WorkplaceType, job.ExperienceLevel, job.Status,
         job.IsFeatured, job.IsHidden, job.PublishedAtUtc, job.ExpiresAtUtc,
-        job.CreatedAtUtc, job.UpdatedAtUtc, job.IsDeleted, job.DeletedAtUtc);
+        job.CreatedAtUtc, job.UpdatedAtUtc, job.IsDeleted, job.DeletedAtUtc,
+        job.MinimumExperienceYears, job.MaximumExperienceYears,
+        job.InternshipDurationMonths, job.IsFlexibleDuration, job.Department,
+        job.RoleCategory, job.EducationRequirement, job.PostedByType);
 
     public static void Apply(this Job job, UpdateJobRequest request)
     {
@@ -31,6 +34,14 @@ public static class JobMappings
         job.EmploymentType = request.EmploymentType;
         job.WorkplaceType = request.WorkplaceType;
         job.ExperienceLevel = request.ExperienceLevel;
+        job.MinimumExperienceYears = request.MinimumExperienceYears;
+        job.MaximumExperienceYears = request.MaximumExperienceYears;
+        job.InternshipDurationMonths = request.InternshipDurationMonths;
+        job.IsFlexibleDuration = request.IsFlexibleDuration;
+        job.Department = TextNormalizer.TrimOrNull(request.Department);
+        job.RoleCategory = TextNormalizer.TrimOrNull(request.RoleCategory);
+        job.EducationRequirement = TextNormalizer.TrimOrNull(request.EducationRequirement);
+        job.PostedByType = request.PostedByType;
         job.ExpiresAtUtc = request.ExpiresAtUtc;
     }
 

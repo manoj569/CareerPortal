@@ -54,10 +54,9 @@ public sealed class CandidateOnboardingPersistenceTests
     {
         Assert.Equal(
             [
+                "FullName",
                 "Email",
                 "Password",
-                "FirstName",
-                "LastName",
                 "PhoneNumber",
                 "HasAcceptedTermsAndPrivacy"
             ],

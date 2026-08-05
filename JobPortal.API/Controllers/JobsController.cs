@@ -126,7 +126,30 @@ public sealed class JobsController(
         ExecuteStateChange(() => jobService.SetHiddenAsync(id, request.Value, cancellationToken),
             request.Value ? "Job hidden successfully." : "Job made visible successfully.",
             cancellationToken);
+    [HttpGet("{id:guid}/recruiter-contact")]
+    [ProducesResponseType(
+    typeof(ApiResponse<AdminRecruiterContactResponse>),
+    StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<AdminRecruiterContactResponse>>> GetRecruiterContact(
+    Guid id,
+    CancellationToken cancellationToken) =>
+    Ok(new ApiResponse<AdminRecruiterContactResponse>(
+        await jobService.GetRecruiterContactAsync(id, cancellationToken)));
 
+    [HttpPut("{id:guid}/recruiter-contact")]
+    [ProducesResponseType(
+        typeof(ApiResponse<AdminRecruiterContactResponse>),
+        StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(typeof(ApiError), StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<ApiResponse<AdminRecruiterContactResponse>>> UpdateRecruiterContact(
+        Guid id,
+        [FromBody] UpdateRecruiterContactRequest request,
+        CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<AdminRecruiterContactResponse>(
+            await jobService.UpdateRecruiterContactAsync(id, request, cancellationToken),
+            "Recruiter contact updated successfully."));
     private async Task<ActionResult<ApiResponse<JobResponse>>> ExecuteStateChange(
         Func<Task<JobResponse>> operation, string message, CancellationToken cancellationToken)
     {

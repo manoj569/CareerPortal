@@ -1,5 +1,6 @@
 using JobPortal.Application.Abstractions.Jobs;
 using JobPortal.Application.Features.PublicJobs;
+using JobPortal.Domain.Enums;
 using JobPortal.Shared.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -17,28 +18,36 @@ public sealed class PublicJobsController(IPublicJobService jobService) : Control
     [HttpGet]
     [HttpGet("search")]
     [HttpGet("filter")]
-    [ProducesResponseType(typeof(ApiResponse<PagedResponse<PublicJobSummary>>), StatusCodes.Status200OK)]
-    public Task<ActionResult<ApiResponse<PagedResponse<PublicJobSummary>>>> Search(
+    [ProducesResponseType(typeof(ApiResponse<PublicJobSearchResponse>), StatusCodes.Status200OK)]
+    public Task<ActionResult<ApiResponse<PublicJobSearchResponse>>> Search(
         [FromQuery] PublicJobQuery query, CancellationToken cancellationToken) =>
         GetPageAsync(query, cancellationToken);
 
     [HttpGet("latest")]
-    [ProducesResponseType(typeof(ApiResponse<PagedResponse<PublicJobSummary>>), StatusCodes.Status200OK)]
-    public Task<ActionResult<ApiResponse<PagedResponse<PublicJobSummary>>>> Latest(
+    [ProducesResponseType(typeof(ApiResponse<PublicJobSearchResponse>), StatusCodes.Status200OK)]
+    public Task<ActionResult<ApiResponse<PublicJobSearchResponse>>> Latest(
         [FromQuery] PublicJobQuery query, CancellationToken cancellationToken) =>
-        GetPageAsync(query with { SortBy = "publishedAt", SortDirection = "desc" }, cancellationToken);
+        GetPageAsync(query with { SortBy = PublicJobSort.LatestPublished }, cancellationToken);
 
     [HttpGet("newest")]
-    [ProducesResponseType(typeof(ApiResponse<PagedResponse<PublicJobSummary>>), StatusCodes.Status200OK)]
-    public Task<ActionResult<ApiResponse<PagedResponse<PublicJobSummary>>>> Newest(
+    [ProducesResponseType(typeof(ApiResponse<PublicJobSearchResponse>), StatusCodes.Status200OK)]
+    public Task<ActionResult<ApiResponse<PublicJobSearchResponse>>> Newest(
         [FromQuery] PublicJobQuery query, CancellationToken cancellationToken) =>
-        GetPageAsync(query with { SortBy = "createdAt", SortDirection = "desc" }, cancellationToken);
+        GetPageAsync(query with { SortBy = PublicJobSort.NewestAdded }, cancellationToken);
 
     [HttpGet("featured")]
-    [ProducesResponseType(typeof(ApiResponse<PagedResponse<PublicJobSummary>>), StatusCodes.Status200OK)]
-    public Task<ActionResult<ApiResponse<PagedResponse<PublicJobSummary>>>> Featured(
+    [ProducesResponseType(typeof(ApiResponse<PublicJobSearchResponse>), StatusCodes.Status200OK)]
+    public Task<ActionResult<ApiResponse<PublicJobSearchResponse>>> Featured(
         [FromQuery] PublicJobQuery query, CancellationToken cancellationToken) =>
-        GetPageAsync(query with { IsFeatured = true }, cancellationToken);
+        GetPageAsync(query with { IsFeatured = true, FeaturedOnly = true }, cancellationToken);
+
+    [HttpGet("filter-options")]
+    [ProducesResponseType(typeof(ApiResponse<PublicJobFilterOptionsResponse>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<PublicJobFilterOptionsResponse>>> FilterOptions(
+        [FromQuery] PublicJobQuery query,
+        CancellationToken cancellationToken) =>
+        Ok(new ApiResponse<PublicJobFilterOptionsResponse>(
+            await jobService.GetFilterOptionsAsync(query, cancellationToken)));
 
     [HttpGet("companies/popular")]
     [ProducesResponseType(typeof(ApiResponse<IReadOnlyCollection<PopularCompanyResponse>>), StatusCodes.Status200OK)]
@@ -62,8 +71,8 @@ public sealed class PublicJobsController(IPublicJobService jobService) : Control
         Ok(new ApiResponse<PublicJobDetails>(
             await jobService.GetDetailsAsync(slug, cancellationToken)));
 
-    private async Task<ActionResult<ApiResponse<PagedResponse<PublicJobSummary>>>> GetPageAsync(
+    private async Task<ActionResult<ApiResponse<PublicJobSearchResponse>>> GetPageAsync(
         PublicJobQuery query, CancellationToken cancellationToken) =>
-        Ok(new ApiResponse<PagedResponse<PublicJobSummary>>(
+        Ok(new ApiResponse<PublicJobSearchResponse>(
             await jobService.SearchAsync(query, cancellationToken)));
 }

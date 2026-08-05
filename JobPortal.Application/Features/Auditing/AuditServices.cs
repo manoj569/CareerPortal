@@ -100,7 +100,11 @@ internal static class AuditMetadataPolicy
             "completed",
             "companyId",
             "currency",
+            "duplicateRows",
             "fileType",
+            "importedRows",
+            "importType",
+            "invalidRows",
             "isFeatured",
             "jobId",
             "membershipStatus",
@@ -110,7 +114,10 @@ internal static class AuditMetadataPolicy
             "result",
             "sizeBytes",
             "source",
-            "status"
+            "status",
+            "skippedRows",
+            "totalRows",
+            "validRows"
         };
 
     public static string? Serialize(IReadOnlyDictionary<string, string?>? metadata)

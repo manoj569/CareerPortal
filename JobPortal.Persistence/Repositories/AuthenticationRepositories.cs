@@ -1,6 +1,7 @@
 using JobPortal.Application.Abstractions.Persistence;
 using JobPortal.Application.Common.Exceptions;
 using JobPortal.Domain.Entities;
+using JobPortal.Domain.Enums;
 using JobPortal.Persistence.Context;
 using Microsoft.EntityFrameworkCore;
 
@@ -10,6 +11,13 @@ public sealed class UserRepository(JobPortalDbContext context) : IUserRepository
 {
     public Task<User?> GetByNormalizedEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default) =>
         context.Users.Include(x => x.Role).SingleOrDefaultAsync(x => x.NormalizedEmail == normalizedEmail, cancellationToken);
+
+    public Task<User?> GetByNormalizedPhoneAsync(
+        string normalizedPhoneNumber,
+        CancellationToken cancellationToken = default) =>
+        context.Users.Include(x => x.Role).SingleOrDefaultAsync(
+            x => x.NormalizedPhoneNumber == normalizedPhoneNumber,
+            cancellationToken);
 
     public Task<bool> RegistrationIdentityExistsAsync(
         string normalizedEmail,
@@ -34,6 +42,75 @@ public sealed class UserRepository(JobPortalDbContext context) : IUserRepository
     }
 
     public void Update(User user) => context.Users.Update(user);
+}
+
+public sealed class AuthenticationChallengeRepository(
+    JobPortalDbContext context) : IAuthenticationChallengeRepository
+{
+    public Task<PendingRegistration?> GetPendingByIdentityAsync(
+        string normalizedEmail,
+        string normalizedPhoneNumber,
+        CancellationToken cancellationToken = default) =>
+        context.PendingRegistrations
+            .Include(x => x.OtpChallenges)
+            .SingleOrDefaultAsync(x =>
+                x.ClosedAtUtc == null &&
+                x.NormalizedEmail == normalizedEmail &&
+                x.NormalizedPhoneNumber == normalizedPhoneNumber,
+                cancellationToken);
+
+    public Task<OtpChallenge?> GetChallengeByIdAsync(
+        Guid challengeId,
+        CancellationToken cancellationToken = default) =>
+        context.OtpChallenges
+            .Include(x => x.PendingRegistration)
+            .Include(x => x.User)
+                .ThenInclude(x => x!.Role)
+            .SingleOrDefaultAsync(x => x.Id == challengeId, cancellationToken);
+
+    public Task<OtpChallenge?> GetLatestForPhoneAsync(
+        string normalizedPhoneNumber,
+        OtpPurpose purpose,
+        CancellationToken cancellationToken = default) =>
+        context.OtpChallenges
+            .Include(x => x.User)
+                .ThenInclude(x => x!.Role)
+            .Where(x =>
+                x.NormalizedPhoneNumber == normalizedPhoneNumber &&
+                x.Purpose == purpose)
+            .OrderByDescending(x => x.LastSentAtUtc)
+            .ThenByDescending(x => x.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+
+    public Task<int> CountSentSinceAsync(
+        string normalizedPhoneNumber,
+        OtpPurpose purpose,
+        DateTime sinceUtc,
+        CancellationToken cancellationToken = default) =>
+        context.OtpChallenges
+            .Where(x =>
+                x.NormalizedPhoneNumber == normalizedPhoneNumber &&
+                x.Purpose == purpose &&
+                x.LastSentAtUtc >= sinceUtc)
+            .SumAsync(x => x.SendCount, cancellationToken);
+
+    public Task AddPendingAsync(
+        PendingRegistration pendingRegistration,
+        CancellationToken cancellationToken = default) =>
+        context.PendingRegistrations.AddAsync(
+            pendingRegistration,
+            cancellationToken).AsTask();
+
+    public Task AddChallengeAsync(
+        OtpChallenge challenge,
+        CancellationToken cancellationToken = default) =>
+        context.OtpChallenges.AddAsync(challenge, cancellationToken).AsTask();
+
+    public void Update(PendingRegistration pendingRegistration) =>
+        context.PendingRegistrations.Update(pendingRegistration);
+
+    public void Update(OtpChallenge challenge) =>
+        context.OtpChallenges.Update(challenge);
 }
 
 public sealed class RefreshTokenRepository(JobPortalDbContext context) : IRefreshTokenRepository

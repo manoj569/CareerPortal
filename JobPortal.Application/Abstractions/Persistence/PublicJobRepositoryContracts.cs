@@ -11,4 +11,6 @@ public interface IPublicJobRepository
         string slug, int limit, CancellationToken cancellationToken = default);
     Task<IReadOnlyCollection<PopularCompanyResponse>> GetPopularCompaniesAsync(
         int limit, CancellationToken cancellationToken = default);
+    Task<PublicJobFilterOptionsResponse> GetFilterOptionsAsync(
+        PublicJobQuery query, CancellationToken cancellationToken = default);
 }

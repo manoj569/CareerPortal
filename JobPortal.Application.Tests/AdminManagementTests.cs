@@ -9,6 +9,7 @@ using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
 using Xunit;
+using static JobPortal.Application.Features.Jobs.JobSearchQueryValidator;
 
 namespace JobPortal.Application.Tests;
 
@@ -19,7 +20,9 @@ public sealed class AdminManagementTests
     {
         var repository = new JobRepositoryFake();
         var service = new JobService(repository, new UnitOfWorkFake(), new AuditWriterTestDouble(), new CreateJobRequestValidator(),
-            new UpdateJobRequestValidator(), new JobSearchQueryValidator(), TimeProvider.System);
+new UpdateJobRequestValidator(),
+new UpdateRecruiterContactRequestValidator(),
+new JobSearchQueryValidator(), TimeProvider.System);
         var request = ValidJobRequest();
 
         await Assert.ThrowsAsync<BadRequestException>(() => service.CreateAsync(request));
@@ -216,6 +219,10 @@ public sealed class AdminBootstrapTests
         public User? Added { get; private set; }
         public int AddCount { get; private set; }
         public Task<User?> GetByNormalizedEmailAsync(string normalizedEmail, CancellationToken cancellationToken = default) => Task.FromResult(Existing);
+        public Task<User?> GetByNormalizedPhoneAsync(
+            string normalizedPhoneNumber,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<User?>(null);
         public Task<bool> RegistrationIdentityExistsAsync(
             string normalizedEmail, string normalizedPhoneNumber,
             CancellationToken cancellationToken = default) =>

@@ -58,7 +58,7 @@ appsettings file. Set `BootstrapAdmin:Enabled` back to `false` after the first A
 been created. The initializer does not apply database migrations and will never elevate an
 existing non-Administrator account.
 - Payment signatures use constant-time verification.
-- Password changes and resets revoke active refresh tokens.
+- Password changes and mobile-OTP resets revoke active refresh tokens.
 - Authentication endpoints have stricter per-client rate limits.
 - Output caching is restricted to anonymous public-job reads and varies by query and origin.
 - Forwarded headers are accepted only from configured trusted proxies.
@@ -69,20 +69,43 @@ Candidate endpoints require the `Candidate` role and re-check that the current a
 Every profile, resume, saved-job, and application query is scoped by the authenticated user's
 identifier; client-supplied candidate identifiers are never accepted.
 
-Public Candidate registration accepts only first/last name, email, password, Indian mobile number,
-and explicit Terms/Privacy consent. Email is trimmed and normalized for case-insensitive lookup.
-Accepted mobile forms are canonicalized to `+91XXXXXXXXXX`, with a separate normalized value used
-by a filtered unique database index. The existing normalized-email unique index remains
-authoritative. Pre-existing or concurrent email/mobile conflicts return the same generic
-registration response. Registration creates an Active Candidate with the historical
-`EmailConfirmed` compatibility flag set and does not create tokens or send email; the Candidate
-can log in immediately. Public clients cannot select a role or set account, confirmation,
+Public Candidate registration accepts only `fullName`, email, password, a ten-digit Indian mobile
+number, and explicit Terms/Privacy consent. Full names are Unicode-aware and split at the first
+space without fabricating a surname. Email is trimmed and lowercase-normalized; mobile numbers
+are canonicalized to `+91XXXXXXXXXX`. User uniqueness remains enforced by the existing filtered
+email/mobile indexes. Public clients cannot select a role or set account, confirmation,
 membership, payment, or audit state.
+
+Registration writes a short-lived `PendingRegistration` containing only a PBKDF2 password hash,
+plus a purpose-scoped `OtpChallenge` containing an HMAC-SHA256 OTP digest. It does not create a
+`User` until the six-digit registration OTP is verified. Challenges expire after five minutes,
+allow five failed attempts, enforce a 60-second resend cooldown, and rotate the digest when
+resent. Successful verification atomically creates an Active, phone-confirmed Candidate without
+issuing JWTs. Duplicate and unknown identities receive privacy-safe responses.
+
+- `POST /api/auth/register`
+- `POST /api/auth/verify-registration-otp`
+- `POST /api/auth/resend-registration-otp`
+- `POST /api/auth/login` accepts an email or Indian mobile identifier plus password.
+- `POST /api/auth/request-login-otp`
+- `POST /api/auth/login-with-otp`
+- `POST /api/auth/request-password-reset`
+- `POST /api/auth/complete-password-reset`
+
+Mobile login OTP is restricted to Active Candidates and uses a distinct purpose from registration.
+Password reset is email-based and returns the same HTTP 202 response for existing, inactive, and
+unknown accounts. Active users receive a cryptographically random, 30-minute link through the
+configured SMTP provider. Only a SHA-256 token digest is persisted. Successful completion replaces
+the password hash, clears the reset digest and expiry, and revokes all active refresh tokens. Reset
+tokens, passwords, email bodies, reset URLs, and SMTP credentials are excluded from logs and audit
+metadata. IP rate limits are applied at the API boundary, while mobile cooldowns, send limits,
+expiry, and attempt limits remain enforced for registration and login OTP challenges.
 During migration, recognizable legacy numbers are canonicalized deterministically; duplicate or
 malformed legacy phone values are cleared without changing account role, status, or login access.
-The email-verification removal compatibility migration activates existing Candidate accounts,
-sets their compatibility confirmation flag, and clears obsolete verification-token state without
-changing Administrator accounts.
+Existing users retain password/email login. The mobile-OTP migration lowercase-normalizes their
+normalized email values and marks existing Candidates with stored normalized mobile numbers as
+phone-confirmed. Historical OTP reset-challenge columns and migrations remain intact for schema
+compatibility, while the `User` password-reset digest and expiry columns power the active email flow.
 
 - `GET|PUT /api/candidate/profile`
 - `GET|PUT /api/candidate/onboarding`
@@ -142,6 +165,54 @@ migrations. Only visible Published jobs with a future expiry are eligible for pu
 featured, saved-job, or new-application queries. Existing applications remain queryable after
 the associated job closes or expires.
 
+## Administrator CSV imports
+
+CSV import endpoints require the exact `Administrator` role and accept one UTF-8 `.csv` file in
+the multipart field named `file`:
+
+- `POST /api/admin/imports/companies/preview`
+- `POST /api/admin/imports/companies/commit`
+- `POST /api/admin/imports/jobs/preview`
+- `POST /api/admin/imports/jobs/commit`
+- `GET /api/admin/imports/templates/companies`
+- `GET /api/admin/imports/templates/jobs`
+
+Uploads are limited to 5 MB and 500 data rows. Headers are case-insensitive but must contain the
+complete documented set exactly once; missing, duplicate, empty, and unknown headers are rejected.
+The parser uses RFC 4180 quoting through CsvHelper and rejects malformed or non-UTF-8 content.
+Preview performs parsing, reference resolution, duplicate detection, and FluentValidation without
+tracking additions or calling the unit of work. Commit requires the same file again and repeats all
+validation. If any row is invalid, commit returns the detailed row results without attaching or
+saving any company, job, or audit change. Otherwise all actionable rows and one counts-only audit
+event are persisted by a single `SaveChanges` transaction; duplicate rows are skipped.
+
+Company headers and fictional template example:
+
+```csv
+name,websiteUrl,industry,location,employeeCount,description,isVerified
+Example Learning Labs,https://example.invalid,Education,"Pune, Maharashtra",120,"Fictional company for import testing",false
+```
+
+Companies match by generated normalized slug or normalized name. Existing rows are explicitly
+reported as `Update existing`; repeated CSV rows are `Skip duplicate`. Name is updated, while a
+non-empty optional cell updates only its corresponding safe company field. Blank optional cells do
+not erase existing values. New companies are always unverified, and the CSV `isVerified` value can
+never verify or unverify an existing company.
+
+Job headers and fictional template example:
+
+```csv
+title,companyName,categoryName,description,applicationUrl,employmentType,workplaceType,experienceLevel,location,minSalary,maxSalary,currencyCode,expiresAtUtc,responsibilities,requirements,benefits,isFeatured
+Example Software Intern,Example Learning Labs,Technology,"Fictional role for template testing",https://jobs.example.invalid/apply/example-role,Internship,Hybrid,Entry,Pune,,,INR,,"Assist with sample projects","Basic programming knowledge","Learning allowance",false
+```
+
+Enum cells use the API enum names documented by Swagger, such as `FullTime`, `Remote`, and `Mid`.
+Job imports resolve existing companies and categories only; missing or ambiguous references are row
+errors. Duplicate identity is company plus title plus application URL. Every imported job is forced
+to `Draft`, `IsHidden=false`, `IsFeatured=false`, and `PublishedAtUtc=null`, regardless of the
+`isFeatured` cell. Recruiter contacts are not part of either the import contract or template.
+Imported jobs must be reviewed and published through the existing lifecycle endpoints.
+
 ## Administrator application review
 
 Application-review endpoints require the exact `Administrator` role:
@@ -191,13 +262,30 @@ used by the API should not have permission to disable the trigger. For stronger 
 tamper-evidence and long-term retention, stream audit records to access-controlled immutable/WORM
 storage or a security information and event management system.
 
-## Transactional email
+## OTP SMS, legal content, and transactional email
 
-Password-reset and application-status messages use direct SMTP delivery. Configure SMTP
-credentials through User Secrets or a production secret manager and set `Email:Enabled` only
-when all required email settings are available. Password-reset token state is committed before
-delivery; delivery failures do not expose the token or weaken authentication. A durable
-transactional outbox should be considered before scaling production delivery.
+`ISmsService` is the provider boundary for registration and login OTP delivery.
+`Otp:HashKey` and real provider credentials belong in User Secrets or environment variables.
+`Fast2SmsService` sends enabled OTP traffic to Fast2SMS over its HTTPS `bulkV2` endpoint
+using a typed `HttpClient` with a 15-second timeout. Configure `Sms:Fast2Sms:ApiKey` only through a
+secret store. Logs contain the OTP purpose, HTTP outcome or safe failure category, and at most the
+destination's final four digits; they never contain the API key, OTP, complete number, request body,
+or provider response body. Safe result categories distinguish disabled/configuration/input failures,
+provider HTTP failures or rejection, timeouts, network failures, unexpected exceptions, and successful
+delivery. `AuthService` separately records each provider result and cooldown/rate-limit skips without
+changing privacy-safe API responses. Automated tests use an in-memory fake sender or HTTP handler.
+All validation and database work honors the incoming request cancellation token. Once an OTP
+challenge has been committed, delivery switches to a 20-second bounded token linked to application
+shutdown, so a Swagger/browser disconnect cannot strand a durable challenge. Provider `HttpClient`
+still enforces its stricter 15-second timeout.
+
+`GET /api/legal/terms-of-use` and `GET /api/legal/privacy-policy` anonymously return application-
+owned versioned, effective-dated plain-text content. The accepted legal version is stored for new
+registrations. Application-status messages and password-reset links use `IEmailService` and direct
+SMTP. Password-reset links are built from `Email:PasswordResetUrl` with URL-encoded email and token
+parameters; production must override this value through `Email__PasswordResetUrl`. Brevo SMTP
+credentials and the sender address remain server-side configuration only. A durable transactional
+outbox should be considered before scaling production email delivery.
 
 ## Razorpay Test Mode payments
 
@@ -212,6 +300,31 @@ record is soft-deleted. Candidate reads and confirmations are owner-scoped. The 
 anonymous only at the HTTP authentication layer and rejects every request without a valid
 Razorpay webhook HMAC. Configuration and manual testing are documented in
 `RAZORPAY_TEST_MODE.md`. Refunds remain a future audited administrative workflow.
+
+## Candidate job search and filter facets
+
+`GET /api/jobs` remains the single public browsing endpoint. It always starts from an
+`AsNoTracking` eligible-job query: Published, visible, not deleted, published at a known UTC time,
+and either without an expiry or expiring after the current `TimeProvider` UTC value. Keyword,
+multi-select location/work mode/company/industry/category metadata, persisted experience and pay
+ranges, internship duration, education, poster type, freshness, and featured filters compose on
+that database query. The default deterministic order is featured first, then latest published;
+explicit latest-added, closing-soon, and salary orders are also database-side.
+
+`GET /api/jobs/filter-options` accepts the same filters and returns only values and counts derived
+from currently eligible jobs. Each facet omits its own selected dimension while retaining all other
+filters, so alternatives remain useful without fake or stale counts. Facets use a fixed set of
+grouped aggregate queries rather than per-job loading. The public summary/details projections do
+not include recruiter contacts, application URLs, hidden/deleted state, or other administrator-only
+fields.
+
+Migration `AddCandidateJobSearchFilters` adds nullable persisted metadata to Jobs and Companies,
+plus range constraints and targeted indexes. Existing records are deliberately not assigned made-up
+experience, education, duration, department, role, poster, or company-type values. Administrator
+create/update contracts expose the new fields as optional. CSV import keeps its legacy headers
+required and treats the new columns as optional, preserving existing files while the downloadable
+templates include the richer schema. All imported jobs still start as visible, unfeatured,
+unpublished Draft records.
 
 ## Scaling guidance
 

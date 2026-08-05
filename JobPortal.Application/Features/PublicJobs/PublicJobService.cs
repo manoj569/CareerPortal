@@ -10,13 +10,17 @@ public sealed class PublicJobService(
     IPublicJobRepository repository,
     IValidator<PublicJobQuery> validator) : IPublicJobService
 {
-    public async Task<PagedResponse<PublicJobSummary>> SearchAsync(
+    public async Task<PublicJobSearchResponse> SearchAsync(
         PublicJobQuery query, CancellationToken cancellationToken = default)
     {
         await validator.ValidateAndThrowAsync(query, cancellationToken);
         var result = await repository.SearchAsync(query, cancellationToken);
-        return new PagedResponse<PublicJobSummary>(
-            result.Items, query.PageNumber, query.PageSize, result.TotalCount);
+        return new PublicJobSearchResponse(
+            result.Items,
+            query.EffectivePageNumber,
+            query.PageSize,
+            result.TotalCount,
+            query.SortBy);
     }
 
     public async Task<PublicJobDetails> GetDetailsAsync(
@@ -42,5 +46,13 @@ public sealed class PublicJobService(
         if (limit is < 1 or > 50)
             throw new BadRequestException("Limit must be between 1 and 50.");
         return await repository.GetPopularCompaniesAsync(limit, cancellationToken);
+    }
+
+    public async Task<PublicJobFilterOptionsResponse> GetFilterOptionsAsync(
+        PublicJobQuery query,
+        CancellationToken cancellationToken = default)
+    {
+        await validator.ValidateAndThrowAsync(query, cancellationToken);
+        return await repository.GetFilterOptionsAsync(query, cancellationToken);
     }
 }

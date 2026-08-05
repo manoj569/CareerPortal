@@ -22,6 +22,58 @@ namespace JobPortal.Persistence.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("JobPortal.Domain.Entities.ApplicationQuotaUsage", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("Period")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("PeriodEndsAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("PeriodStartsAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("UsedApplications")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsDeleted");
+
+                    b.HasIndex("UserId", "Period", "PeriodStartsAtUtc")
+                        .IsUnique()
+                        .HasFilter("[IsDeleted] = 0");
+
+                    b.ToTable("ApplicationQuotaUsages", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_ApplicationQuotaUsages_UsedApplications", "[UsedApplications] >= 0");
+                        });
+                });
+
             modelBuilder.Entity("JobPortal.Domain.Entities.AuditLog", b =>
                 {
                     b.Property<Guid>("Id")
@@ -146,6 +198,9 @@ namespace JobPortal.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("CompanyType")
+                        .HasColumnType("int");
+
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -207,6 +262,8 @@ namespace JobPortal.Persistence.Migrations
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
 
+                    b.HasIndex("CompanyType", "Industry");
+
                     b.ToTable("Companies", (string)null);
                 });
 
@@ -242,10 +299,18 @@ namespace JobPortal.Persistence.Migrations
                     b.Property<DateTime?>("DeletedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("Department")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
                     b.Property<string>("Description")
                         .IsRequired()
                         .HasMaxLength(16000)
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("EducationRequirement")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
 
                     b.Property<int>("EmploymentType")
                         .HasColumnType("int");
@@ -256,10 +321,16 @@ namespace JobPortal.Persistence.Migrations
                     b.Property<DateTime?>("ExpiresAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<int?>("InternshipDurationMonths")
+                        .HasColumnType("int");
+
                     b.Property<bool>("IsDeleted")
                         .HasColumnType("bit");
 
                     b.Property<bool>("IsFeatured")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsFlexibleDuration")
                         .HasColumnType("bit");
 
                     b.Property<bool>("IsHidden")
@@ -269,13 +340,22 @@ namespace JobPortal.Persistence.Migrations
                         .HasMaxLength(250)
                         .HasColumnType("nvarchar(250)");
 
+                    b.Property<int?>("MaximumExperienceYears")
+                        .HasColumnType("int");
+
                     b.Property<decimal?>("MaximumSalary")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
 
+                    b.Property<int?>("MinimumExperienceYears")
+                        .HasColumnType("int");
+
                     b.Property<decimal?>("MinimumSalary")
                         .HasPrecision(18, 2)
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<int?>("PostedByType")
+                        .HasColumnType("int");
 
                     b.Property<DateTime?>("PublishedAtUtc")
                         .HasColumnType("datetime2");
@@ -292,6 +372,10 @@ namespace JobPortal.Persistence.Migrations
                     b.Property<string>("Responsibilities")
                         .HasMaxLength(8000)
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("RoleCategory")
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
 
                     b.Property<string>("Slug")
                         .IsRequired()
@@ -316,6 +400,8 @@ namespace JobPortal.Persistence.Migrations
 
                     b.HasIndex("CreatedAtUtc");
 
+                    b.HasIndex("Department");
+
                     b.HasIndex("ExpiresAtUtc");
 
                     b.HasIndex("IsDeleted");
@@ -323,6 +409,8 @@ namespace JobPortal.Persistence.Migrations
                     b.HasIndex("ReferenceNumber")
                         .IsUnique()
                         .HasFilter("[IsDeleted] = 0");
+
+                    b.HasIndex("RoleCategory");
 
                     b.HasIndex("Slug")
                         .IsUnique()
@@ -332,12 +420,20 @@ namespace JobPortal.Persistence.Migrations
 
                     b.HasIndex("Status", "ExpiresAtUtc");
 
+                    b.HasIndex("Status", "PostedByType");
+
                     b.HasIndex("CompanyId", "Status", "PublishedAtUtc");
+
+                    b.HasIndex("Status", "WorkplaceType", "EmploymentType");
 
                     b.HasIndex("Status", "IsFeatured", "IsHidden", "PublishedAtUtc");
 
                     b.ToTable("Jobs", null, t =>
                         {
+                            t.HasCheckConstraint("CK_Jobs_ExperienceRange", "[MinimumExperienceYears] IS NULL OR [MaximumExperienceYears] IS NULL OR [MinimumExperienceYears] <= [MaximumExperienceYears]");
+
+                            t.HasCheckConstraint("CK_Jobs_InternshipDuration", "[InternshipDurationMonths] IS NULL OR [InternshipDurationMonths] IN (1, 2, 3, 6)");
+
                             t.HasCheckConstraint("CK_Jobs_SalaryRange", "[MinimumSalary] IS NULL OR [MaximumSalary] IS NULL OR [MinimumSalary] <= [MaximumSalary]");
                         });
                 });
@@ -449,6 +545,59 @@ namespace JobPortal.Persistence.Migrations
                     b.HasIndex("ApplicationId", "ChangedAtUtc");
 
                     b.ToTable("JobApplicationStatusHistory", (string)null);
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.JobRecruiterContact", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ContactName")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<string>("ContactRole")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("nvarchar(150)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsSharingApproved")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("JobId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PhoneNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsDeleted");
+
+                    b.HasIndex("JobId")
+                        .IsUnique()
+                        .HasFilter("[IsDeleted] = 0");
+
+                    b.ToTable("JobRecruiterContacts", (string)null);
                 });
 
             modelBuilder.Entity("JobPortal.Domain.Entities.JobSkill", b =>
@@ -642,13 +791,99 @@ namespace JobPortal.Persistence.Migrations
                     b.Property<Guid>("UserId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("UserId1")
+                        .HasColumnType("uniqueidentifier");
+
                     b.HasKey("Id");
 
                     b.HasIndex("IsDeleted");
 
+                    b.HasIndex("UserId1");
+
+                    b.HasIndex("UserId", "IsRead");
+
                     b.HasIndex("UserId", "IsRead", "CreatedAtUtc");
 
                     b.ToTable("Notifications", (string)null);
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.OtpChallenge", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ConsumedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("FailedAttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime>("LastSentAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("NormalizedPhoneNumber")
+                        .IsRequired()
+                        .HasMaxLength(13)
+                        .HasColumnType("nvarchar(13)");
+
+                    b.Property<string>("OtpHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<Guid?>("PendingRegistrationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("Purpose")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("ResetChallengeExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("SendCount")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("UserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("VerifiedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsDeleted");
+
+                    b.HasIndex("PendingRegistrationId")
+                        .IsUnique()
+                        .HasFilter("[PendingRegistrationId] IS NOT NULL AND [IsDeleted] = 0");
+
+                    b.HasIndex("UserId");
+
+                    b.HasIndex("Purpose", "LastSentAtUtc");
+
+                    b.HasIndex("NormalizedPhoneNumber", "Purpose", "ConsumedAtUtc", "ExpiresAtUtc");
+
+                    b.ToTable("OtpChallenges", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_OtpChallenges_FailedAttemptCount", "[FailedAttemptCount] BETWEEN 0 AND 5");
+
+                            t.HasCheckConstraint("CK_OtpChallenges_SendCount", "[SendCount] >= 1");
+                        });
                 });
 
             modelBuilder.Entity("JobPortal.Domain.Entities.Payment", b =>
@@ -804,6 +1039,91 @@ namespace JobPortal.Persistence.Migrations
                     b.HasIndex("UserId", "OccurredAtUtc");
 
                     b.ToTable("PaymentHistory", (string)null);
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.PendingRegistration", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ClosedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("CompletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("CompletedUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("DeletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<DateTime>("ExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("FirstName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("LastName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("NormalizedEmail")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("NormalizedPhoneNumber")
+                        .IsRequired()
+                        .HasMaxLength(13)
+                        .HasColumnType("nvarchar(13)");
+
+                    b.Property<string>("PasswordHash")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<DateTime>("TermsAndPrivacyAcceptedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("TermsAndPrivacyVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<DateTime?>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CompletedUserId");
+
+                    b.HasIndex("IsDeleted");
+
+                    b.HasIndex("NormalizedEmail")
+                        .IsUnique()
+                        .HasFilter("[ClosedAtUtc] IS NULL AND [IsDeleted] = 0");
+
+                    b.HasIndex("NormalizedPhoneNumber")
+                        .IsUnique()
+                        .HasFilter("[ClosedAtUtc] IS NULL AND [IsDeleted] = 0");
+
+                    b.HasIndex("ExpiresAtUtc", "ClosedAtUtc");
+
+                    b.ToTable("PendingRegistrations", (string)null);
                 });
 
             modelBuilder.Entity("JobPortal.Domain.Entities.RefreshToken", b =>
@@ -1183,6 +1503,9 @@ namespace JobPortal.Persistence.Migrations
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
+                    b.Property<bool>("PhoneConfirmed")
+                        .HasColumnType("bit");
+
                     b.Property<string>("PhoneNumber")
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
@@ -1233,6 +1556,10 @@ namespace JobPortal.Persistence.Migrations
 
                     b.Property<DateTime?>("TermsAndPrivacyAcceptedAtUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("TermsAndPrivacyVersion")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
 
                     b.Property<DateTime?>("UpdatedAtUtc")
                         .HasColumnType("datetime2");
@@ -1310,6 +1637,17 @@ namespace JobPortal.Persistence.Migrations
                     b.HasIndex("UserId", "JobId", "Action", "OccurredAtUtc");
 
                     b.ToTable("UserJobHistories", (string)null);
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.ApplicationQuotaUsage", b =>
+                {
+                    b.HasOne("JobPortal.Domain.Entities.User", "User")
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("JobPortal.Domain.Entities.AuditLog", b =>
@@ -1400,6 +1738,17 @@ namespace JobPortal.Persistence.Migrations
                     b.Navigation("Application");
                 });
 
+            modelBuilder.Entity("JobPortal.Domain.Entities.JobRecruiterContact", b =>
+                {
+                    b.HasOne("JobPortal.Domain.Entities.Job", "Job")
+                        .WithOne("RecruiterContact")
+                        .HasForeignKey("JobPortal.Domain.Entities.JobRecruiterContact", "JobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Job");
+                });
+
             modelBuilder.Entity("JobPortal.Domain.Entities.JobSkill", b =>
                 {
                     b.HasOne("JobPortal.Domain.Entities.Job", "Job")
@@ -1451,11 +1800,32 @@ namespace JobPortal.Persistence.Migrations
 
             modelBuilder.Entity("JobPortal.Domain.Entities.Notification", b =>
                 {
-                    b.HasOne("JobPortal.Domain.Entities.User", "User")
-                        .WithMany("Notifications")
+                    b.HasOne("JobPortal.Domain.Entities.User", null)
+                        .WithMany()
                         .HasForeignKey("UserId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
+
+                    b.HasOne("JobPortal.Domain.Entities.User", "User")
+                        .WithMany("Notifications")
+                        .HasForeignKey("UserId1");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.OtpChallenge", b =>
+                {
+                    b.HasOne("JobPortal.Domain.Entities.PendingRegistration", "PendingRegistration")
+                        .WithMany("OtpChallenges")
+                        .HasForeignKey("PendingRegistrationId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("JobPortal.Domain.Entities.User", "User")
+                        .WithMany("OtpChallenges")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("PendingRegistration");
 
                     b.Navigation("User");
                 });
@@ -1495,6 +1865,16 @@ namespace JobPortal.Persistence.Migrations
                     b.Navigation("Payment");
 
                     b.Navigation("User");
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.PendingRegistration", b =>
+                {
+                    b.HasOne("JobPortal.Domain.Entities.User", "CompletedUser")
+                        .WithMany()
+                        .HasForeignKey("CompletedUserId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("CompletedUser");
                 });
 
             modelBuilder.Entity("JobPortal.Domain.Entities.RefreshToken", b =>
@@ -1585,6 +1965,8 @@ namespace JobPortal.Persistence.Migrations
 
                     b.Navigation("JobSkills");
 
+                    b.Navigation("RecruiterContact");
+
                     b.Navigation("SavedByUsers");
 
                     b.Navigation("UserHistory");
@@ -1605,6 +1987,11 @@ namespace JobPortal.Persistence.Migrations
             modelBuilder.Entity("JobPortal.Domain.Entities.Payment", b =>
                 {
                     b.Navigation("History");
+                });
+
+            modelBuilder.Entity("JobPortal.Domain.Entities.PendingRegistration", b =>
+                {
+                    b.Navigation("OtpChallenges");
                 });
 
             modelBuilder.Entity("JobPortal.Domain.Entities.Role", b =>
@@ -1628,6 +2015,8 @@ namespace JobPortal.Persistence.Migrations
                     b.Navigation("Memberships");
 
                     b.Navigation("Notifications");
+
+                    b.Navigation("OtpChallenges");
 
                     b.Navigation("OwnedCompanies");
 

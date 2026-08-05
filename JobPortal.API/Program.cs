@@ -12,6 +12,7 @@ using JobPortal.API.Startup;
 using JobPortal.API.Swagger;
 using JobPortal.Application;
 using JobPortal.Application.Abstractions.Auditing;
+using JobPortal.Application.Abstractions.Authentication;
 using JobPortal.Infrastructure;
 using JobPortal.Persistence;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
@@ -25,7 +26,10 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using Serilog;
 
+
 var builder = WebApplication.CreateBuilder(args);
+
+builder.Environment.EnvironmentName = "Production";
 
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
@@ -97,6 +101,36 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             }));
+    options.AddPolicy("RegistrationOtp", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(10),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("OtpRequest", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 5,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
+    options.AddPolicy("OtpVerification", context =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(5),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            }));
     options.OnRejected = async (context, cancellationToken) =>
     {
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var retryAfter))
@@ -120,7 +154,7 @@ builder.Services.AddSwaggerGen(options =>
         Title = "Job Portal API",
         Version = "v1",
         Description =
-            "CareerPortal API including Candidate registration/onboarding and Administrator management endpoints."
+            "CareerPortal API including mobile-OTP Candidate authentication, email password reset, legal content, onboarding, and Administrator management endpoints."
     });
     options.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
@@ -143,30 +177,36 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// --- JWT / OTP secrets -------------------------------------------------
+// Single source of truth: configuration key "Jwt:Key".
+// On Render, set this via an environment variable named "Jwt__Key"
+// (double underscore = ":" in .NET configuration binding).
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 var signingKey = jwtSettings["Key"]
-    ?? throw new InvalidOperationException("JWT signing key is not configured.");
+    ?? throw new InvalidOperationException("JWT signing key is not configured. Set the 'Jwt:Key' configuration value (env var 'Jwt__Key' on Render).");
 if (signingKey.Length < 32)
     throw new InvalidOperationException("JWT signing key must contain at least 32 characters.");
 if (!builder.Environment.IsDevelopment() && signingKey.StartsWith("CHANGE_THIS", StringComparison.Ordinal))
-    throw new InvalidOperationException("The default JWT signing key cannot be used outside Development.");
+    throw new InvalidOperationException("The default JWT signing key cannot be used outside Development. Set 'Jwt__Key' in your hosting environment's variables.");
 
-builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+var otpHashKey = builder.Configuration["Otp:HashKey"]
+    ?? throw new InvalidOperationException("OTP hash key is not configured. Set the 'Otp:HashKey' configuration value (env var 'Otp__HashKey' on Render).");
+if (otpHashKey.Length < 32)
+    throw new InvalidOperationException("OTP hash key must contain at least 32 characters.");
+if (!builder.Environment.IsDevelopment() &&
+    otpHashKey.StartsWith("CHANGE_THIS", StringComparison.Ordinal))
+    throw new InvalidOperationException(
+        "The default OTP hash key cannot be used outside Development. Set 'Otp__HashKey' in your hosting environment's variables.");
+
+builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        // Uses the same signingKey validated above (from configuration key "Jwt:Key").
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = jwtSettings["Issuer"],
-            ValidAudience = jwtSettings["Audience"],
             IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
-            NameClaimType = ClaimTypes.Email,
-            RoleClaimType = ClaimTypes.Role,
-            ClockSkew = TimeSpan.Zero
+            ValidateIssuer = false,
+            ValidateAudience = false
         };
     });
 
@@ -174,6 +214,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddPersistence(builder.Configuration);
+builder.Services.AddSingleton<IApplicationShutdown, HostApplicationShutdown>();
 builder.Services.AddScoped<AdminBootstrapInitializer>();
 
 var app = builder.Build();
@@ -185,8 +226,6 @@ await using (var scope = app.Services.CreateAsyncScope())
 }
 
 app.UseForwardedHeaders();
-app.UseMiddleware<GlobalExceptionMiddleware>();
-app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseSerilogRequestLogging(options =>
 {
     options.EnrichDiagnosticContext = (diagnosticContext, httpContext) =>
@@ -197,6 +236,8 @@ app.UseSerilogRequestLogging(options =>
         diagnosticContext.Set("CorrelationId", httpContext.TraceIdentifier);
     };
 });
+app.UseMiddleware<GlobalExceptionMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
 app.UseResponseCompression();
 
 if (app.Environment.IsDevelopment())

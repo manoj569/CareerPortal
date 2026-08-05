@@ -18,7 +18,7 @@ public sealed class AdminApplicationService(
     IAdminApplicationRepository applications,
     IUserRepository users,
     IResumeStorage resumeStorage,
-    //IEmailService emailService,
+    IEmailService emailService,
     IUnitOfWork unitOfWork,
     IAuditWriter auditWriter,
     IValidator<AdminApplicationQuery> queryValidator,
@@ -98,8 +98,11 @@ public sealed class AdminApplicationService(
 
         if (request.Status is JobApplicationStatus.Shortlisted or JobApplicationStatus.Rejected)
         {
-            ////_ = await emailService.SendApplicationStatusAsync(
-            //    application.User, application.Job.Title, request.Status, cancellationToken);
+            _ = await emailService.SendApplicationStatusAsync(
+                application.User,
+                application.Job.Title,
+                request.Status,
+                cancellationToken);
         }
         return Map(application);
     }
@@ -115,8 +118,7 @@ public sealed class AdminApplicationService(
         var administrator = await users.GetByIdWithRoleAsync(userId, cancellationToken);
         if (administrator is null ||
             administrator.RoleId != SystemRoleIds.Administrator ||
-            administrator.Status != UserStatus.Active ||
-            !administrator.EmailConfirmed)
+            administrator.Status != UserStatus.Active)
             throw new UnauthorizedException("An active Administrator account is required.");
         return administrator;
     }

@@ -78,6 +78,17 @@ public sealed class CandidateController(ICandidateService candidates) : Controll
         Ok(new ApiResponse<PagedResponse<CandidateSavedJobResponse>>(
             await candidates.GetSavedJobsAsync(User.GetRequiredUserId(), query, cancellationToken)));
 
+    [HttpGet("application-quota")]
+    [ProducesResponseType(
+    typeof(ApiResponse<ApplicationQuotaResponse>),
+    StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<ApplicationQuotaResponse>>> ApplicationQuota(
+    CancellationToken cancellationToken) =>
+    Ok(new ApiResponse<ApplicationQuotaResponse>(
+        await candidates.GetApplicationQuotaAsync(
+            User.GetRequiredUserId(),
+            cancellationToken)));
+
     [HttpPut("saved-jobs/{jobId:guid}")]
     public async Task<IActionResult> SaveJob(Guid jobId, CancellationToken cancellationToken)
     {
@@ -93,6 +104,8 @@ public sealed class CandidateController(ICandidateService candidates) : Controll
     }
 
     [HttpPost("jobs/{jobId:guid}/applications")]
+    [ProducesResponseType(typeof(ApiResponse<JobApplicationResponse>), StatusCodes.Status201Created)]
+    [ProducesResponseType(typeof(ApplicationQuotaLimitErrorResponse), StatusCodes.Status403Forbidden)]
     public async Task<ActionResult<ApiResponse<JobApplicationResponse>>> Apply(
         Guid jobId, CreateJobApplicationRequest request, CancellationToken cancellationToken)
     {
@@ -120,4 +133,17 @@ public sealed class CandidateController(ICandidateService candidates) : Controll
         Ok(new ApiResponse<JobApplicationResponse>(
             await candidates.WithdrawAsync(User.GetRequiredUserId(), applicationId, cancellationToken),
             "Application withdrawn successfully."));
+
+    [HttpGet("jobs/{jobId:guid}/recruiter-contact")]
+    [ProducesResponseType(
+    typeof(ApiResponse<RecruiterContactResponse>),
+    StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApiResponse<RecruiterContactResponse>>> GetRecruiterContact(
+    Guid jobId,
+    CancellationToken cancellationToken) =>
+    Ok(new ApiResponse<RecruiterContactResponse>(
+        await candidates.GetRecruiterContactAsync(
+            User.GetRequiredUserId(),
+            jobId,
+            cancellationToken)));
 }

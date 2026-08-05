@@ -14,5 +14,10 @@ public static class DashboardProjections
                 saved.Job.CategoryId, saved.Job.Category.Name, saved.Job.Location,
                 saved.Job.MinimumSalary, saved.Job.MaximumSalary, saved.Job.CurrencyCode,
                 saved.Job.EmploymentType, saved.Job.WorkplaceType, saved.Job.ExperienceLevel,
-                saved.Job.IsFeatured, saved.Job.PublishedAtUtc!.Value, saved.Job.ExpiresAtUtc));
+                saved.Job.IsFeatured, saved.Job.PublishedAtUtc!.Value, saved.Job.ExpiresAtUtc,
+                saved.Job.MinimumExperienceYears, saved.Job.MaximumExperienceYears,
+                saved.Job.InternshipDurationMonths, saved.Job.IsFlexibleDuration,
+                saved.Job.Department, saved.Job.RoleCategory,
+                saved.Job.EducationRequirement, saved.Job.PostedByType,
+                saved.Job.Company.CompanyType, saved.Job.Company.Industry));
 }

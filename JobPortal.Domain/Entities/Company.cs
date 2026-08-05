@@ -1,4 +1,5 @@
 using JobPortal.Domain.Common;
+using JobPortal.Domain.Enums;
 
 namespace JobPortal.Domain.Entities;
 
@@ -12,6 +13,7 @@ public sealed class Company : BaseEntity
     public string? Industry { get; set; }
     public string? Location { get; set; }
     public int? EmployeeCount { get; set; }
+    public CompanyType? CompanyType { get; set; }
     public bool IsVerified { get; set; }
     public Guid OwnerUserId { get; set; }
     public User OwnerUser { get; set; } = null!;

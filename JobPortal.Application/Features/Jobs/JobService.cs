@@ -17,6 +17,7 @@ public sealed class JobService(
     IAuditWriter auditWriter,
     IValidator<CreateJobRequest> createValidator,
     IValidator<UpdateJobRequest> updateValidator,
+    IValidator<UpdateRecruiterContactRequest> recruiterContactValidator,
     IValidator<JobSearchQuery> searchValidator,
     TimeProvider timeProvider) : IJobService
 {
@@ -36,7 +37,10 @@ public sealed class JobService(
         job.Apply(new UpdateJobRequest(request.Title, request.Description, request.CompanyId, request.CategoryId, request.ApplicationUrl,
             request.Responsibilities, request.Requirements, request.Benefits, request.Location,
             request.MinimumSalary, request.MaximumSalary, request.CurrencyCode, request.EmploymentType,
-            request.WorkplaceType, request.ExperienceLevel, request.ExpiresAtUtc));
+            request.WorkplaceType, request.ExperienceLevel, request.ExpiresAtUtc,
+            request.MinimumExperienceYears, request.MaximumExperienceYears,
+            request.InternshipDurationMonths, request.IsFlexibleDuration, request.Department,
+            request.RoleCategory, request.EducationRequirement, request.PostedByType));
 
         await jobs.AddAsync(job, cancellationToken);
         await auditWriter.AppendAsync(new(
@@ -169,7 +173,71 @@ public sealed class JobService(
             if (isHidden)
                 job.IsFeatured = false;
         }, cancellationToken);
+    public async Task<AdminRecruiterContactResponse> GetRecruiterContactAsync(
+    Guid jobId,
+    CancellationToken cancellationToken = default)
+    {
+        var job = await RequiredJobAsync(jobId, false, cancellationToken);
 
+        var contact = job.RecruiterContact
+            ?? throw new NotFoundException(
+                "Recruiter contact details have not been added for this job.");
+
+        return new AdminRecruiterContactResponse(
+            job.Id,
+            contact.ContactName,
+            contact.ContactRole,
+            contact.Email,
+            contact.PhoneNumber,
+            contact.IsSharingApproved);
+    }
+
+    public async Task<AdminRecruiterContactResponse> UpdateRecruiterContactAsync(
+        Guid jobId,
+        UpdateRecruiterContactRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await recruiterContactValidator.ValidateAndThrowAsync(request, cancellationToken);
+
+        var job = await RequiredJobAsync(jobId, false, cancellationToken);
+
+        var contact = job.RecruiterContact ?? new JobRecruiterContact
+        {
+            JobId = job.Id
+        };
+
+        contact.ContactName = request.ContactName.Trim();
+        contact.ContactRole = request.ContactRole.Trim();
+        contact.Email = request.Email.Trim();
+        contact.PhoneNumber = string.IsNullOrWhiteSpace(request.PhoneNumber)
+            ? null
+            : request.PhoneNumber.Trim();
+        contact.IsSharingApproved = request.IsSharingApproved;
+
+        job.RecruiterContact = contact;
+        jobs.Update(job);
+
+        await auditWriter.AppendAsync(new(
+            AuditAction.Update,
+            "RecruiterContact",
+            job.Id.ToString(),
+            new Dictionary<string, string?>
+            {
+                ["jobId"] = job.Id.ToString(),
+                ["isSharingApproved"] = contact.IsSharingApproved.ToString()
+            }),
+            cancellationToken);
+
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return new AdminRecruiterContactResponse(
+            job.Id,
+            contact.ContactName,
+            contact.ContactRole,
+            contact.Email,
+            contact.PhoneNumber,
+            contact.IsSharingApproved);
+    }
     public async Task<PagedResponse<JobResponse>> SearchAsync(JobSearchQuery query, CancellationToken cancellationToken = default)
     {
         await searchValidator.ValidateAndThrowAsync(query, cancellationToken);
@@ -227,7 +295,10 @@ public sealed class JobService(
         job.Title, job.Description, job.CompanyId, job.CategoryId, job.ApplicationUrl,
         job.Responsibilities, job.Requirements, job.Benefits, job.Location,
         job.MinimumSalary, job.MaximumSalary, job.CurrencyCode, job.EmploymentType,
-        job.WorkplaceType, job.ExperienceLevel, job.ExpiresAtUtc);
+        job.WorkplaceType, job.ExperienceLevel, job.ExpiresAtUtc,
+        job.MinimumExperienceYears, job.MaximumExperienceYears,
+        job.InternshipDurationMonths, job.IsFlexibleDuration, job.Department,
+        job.RoleCategory, job.EducationRequirement, job.PostedByType);
 
     private static string Slugify(string value)
     {

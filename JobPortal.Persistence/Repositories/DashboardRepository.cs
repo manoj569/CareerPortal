@@ -19,9 +19,9 @@ public sealed class DashboardRepository(
     {
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         var source = context.SavedJobs.AsNoTracking().Where(x => x.UserId == userId &&
-            x.Job.Status == JobStatus.Published && !x.Job.IsHidden &&
+            x.Job.Status == JobStatus.Published && !x.Job.IsHidden && !x.Job.IsDeleted &&
             x.Job.PublishedAtUtc.HasValue &&
-            x.Job.ExpiresAtUtc.HasValue && x.Job.ExpiresAtUtc > utcNow);
+            (!x.Job.ExpiresAtUtc.HasValue || x.Job.ExpiresAtUtc > utcNow));
         var count = await source.CountAsync(cancellationToken);
         var items = await source.OrderByDescending(x => x.CreatedAtUtc).ThenByDescending(x => x.Id)
             .Skip((query.PageNumber - 1) * query.PageSize).Take(query.PageSize)
@@ -34,9 +34,9 @@ public sealed class DashboardRepository(
     {
         var utcNow = timeProvider.GetUtcNow().UtcDateTime;
         return context.Jobs.AsNoTracking().AnyAsync(x => x.Id == jobId &&
-            x.Status == JobStatus.Published && !x.IsHidden &&
+            x.Status == JobStatus.Published && !x.IsHidden && !x.IsDeleted &&
             x.PublishedAtUtc.HasValue &&
-            x.ExpiresAtUtc.HasValue && x.ExpiresAtUtc > utcNow, cancellationToken);
+            (!x.ExpiresAtUtc.HasValue || x.ExpiresAtUtc > utcNow), cancellationToken);
     }
 
     public Task<bool> IsJobSavedAsync(Guid userId, Guid jobId, CancellationToken cancellationToken = default) =>
@@ -81,7 +81,10 @@ public sealed class DashboardRepository(
         Guid userId, Guid notificationId, CancellationToken cancellationToken = default) =>
         context.Notifications.SingleOrDefaultAsync(
             x => x.Id == notificationId && x.UserId == userId, cancellationToken);
-
+    public async Task AddNotificationAsync(Notification notification, CancellationToken cancellationToken = default)
+    {
+        await context.Notifications.AddAsync(notification, cancellationToken);
+    }
     public Task<int> MarkAllNotificationsReadAsync(
         Guid userId, DateTime readAtUtc, CancellationToken cancellationToken = default) =>
         context.Notifications.Where(x => x.UserId == userId && !x.IsRead)

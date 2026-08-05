@@ -20,6 +20,14 @@ public sealed class Job : BaseEntity
     public EmploymentType EmploymentType { get; set; }
     public WorkplaceType WorkplaceType { get; set; }
     public ExperienceLevel ExperienceLevel { get; set; }
+    public int? MinimumExperienceYears { get; set; }
+    public int? MaximumExperienceYears { get; set; }
+    public int? InternshipDurationMonths { get; set; }
+    public bool IsFlexibleDuration { get; set; }
+    public string? Department { get; set; }
+    public string? RoleCategory { get; set; }
+    public string? EducationRequirement { get; set; }
+    public PostedByType? PostedByType { get; set; }
     public JobStatus Status { get; set; } = JobStatus.Draft;
     public bool IsFeatured { get; set; }
     public bool IsHidden { get; set; }
@@ -33,4 +41,5 @@ public sealed class Job : BaseEntity
     public ICollection<SavedJob> SavedByUsers { get; set; } = new List<SavedJob>();
     public ICollection<UserJobHistory> UserHistory { get; set; } = new List<UserJobHistory>();
     public ICollection<JobApplication> Applications { get; set; } = new List<JobApplication>();
+    public JobRecruiterContact? RecruiterContact { get; set; }
 }

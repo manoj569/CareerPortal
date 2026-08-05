@@ -175,33 +175,34 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
+// --- JWT / OTP secrets -------------------------------------------------
+// Single source of truth: configuration key "Jwt:Key".
+// On Render, set this via an environment variable named "Jwt__Key"
+// (double underscore = ":" in .NET configuration binding).
 var jwtSettings = builder.Configuration.GetSection("Jwt");
 var signingKey = jwtSettings["Key"]
-    ?? throw new InvalidOperationException("JWT signing key is not configured.");
+    ?? throw new InvalidOperationException("JWT signing key is not configured. Set the 'Jwt:Key' configuration value (env var 'Jwt__Key' on Render).");
 if (signingKey.Length < 32)
     throw new InvalidOperationException("JWT signing key must contain at least 32 characters.");
 if (!builder.Environment.IsDevelopment() && signingKey.StartsWith("CHANGE_THIS", StringComparison.Ordinal))
-    throw new InvalidOperationException("The default JWT signing key cannot be used outside Development.");
+    throw new InvalidOperationException("The default JWT signing key cannot be used outside Development. Set 'Jwt__Key' in your hosting environment's variables.");
 
 var otpHashKey = builder.Configuration["Otp:HashKey"]
-    ?? throw new InvalidOperationException("OTP hash key is not configured.");
+    ?? throw new InvalidOperationException("OTP hash key is not configured. Set the 'Otp:HashKey' configuration value (env var 'Otp__HashKey' on Render).");
 if (otpHashKey.Length < 32)
     throw new InvalidOperationException("OTP hash key must contain at least 32 characters.");
 if (!builder.Environment.IsDevelopment() &&
     otpHashKey.StartsWith("CHANGE_THIS", StringComparison.Ordinal))
     throw new InvalidOperationException(
-        "The default OTP hash key cannot be used outside Development.");
+        "The default OTP hash key cannot be used outside Development. Set 'Otp__HashKey' in your hosting environment's variables.");
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        // ✅ FIXED: Use builder.Configuration to read the secret from Render's Environment Variables
-        var jwtSecret = builder.Configuration["JWT_SECRET"]
-            ?? throw new InvalidOperationException("JWT_SECRET environment variable is not set in Render.");
-
+        // Uses the same signingKey validated above (from configuration key "Jwt:Key").
         options.TokenValidationParameters = new TokenValidationParameters
         {
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret)),
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
             ValidateIssuer = false,
             ValidateAudience = false
         };

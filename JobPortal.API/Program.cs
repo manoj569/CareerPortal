@@ -29,6 +29,8 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Environment.EnvironmentName = "Production";
+
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
     .ReadFrom.Services(services)

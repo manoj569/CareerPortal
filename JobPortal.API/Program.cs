@@ -29,7 +29,8 @@ using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-builder.Environment.EnvironmentName = "Production";
+// ✅ CHANGE: Allow local Development while keeping Production on Render
+builder.Environment.EnvironmentName = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
 
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Configuration(context.Configuration)
@@ -214,7 +215,7 @@ builder.Services.AddAuthorization();
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddPersistence(builder.Configuration);
-builder.Services.AddSingleton<IApplicationShutdown, HostApplicationShutdown>();
+//builder.Services.AddSingleton<IApplicationShutdown, HostApplicationShutdown>();
 builder.Services.AddScoped<AdminBootstrapInitializer>();
 
 var app = builder.Build();

@@ -29,4 +29,8 @@
     <ProjectReference Include="..\JobPortal.Shared\JobPortal.Shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include=".github\workflows\migrate.yml" />
+  </ItemGroup>
+
 </Project>

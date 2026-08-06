@@ -10,10 +10,6 @@ using JobPortal.Application.Features.Legal;
 using JobPortal.Domain.Common;
 using JobPortal.Domain.Entities;
 using JobPortal.Domain.Enums;
-using JobPortal.Infrastructure.Authentication;
-using JobPortal.Persistence.Context;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Xunit;
 
@@ -48,11 +44,9 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
-    public async Task RegistrationPersistsOnlyPendingHashedChallenge()
+    public async Task RegistrationCreatesActiveCandidateDirectly()
     {
         var fixture = CreateFixture();
-        fixture.Sms.BeforeSend = () =>
-            Assert.True(fixture.UnitOfWork.SaveCount > 0);
 
         var response = await fixture.Service.RegisterAsync(
             ValidRegistration() with
@@ -61,233 +55,26 @@ public sealed class AuthenticationTests
                 Email = "  User@Example.COM  "
             });
 
-        Assert.NotEqual(Guid.Empty, response.ChallengeId);
-        Assert.Empty(fixture.Users.Items);
-        var pending = Assert.Single(fixture.Challenges.Pending);
-        var challenge = Assert.Single(fixture.Challenges.OtpChallenges);
-        Assert.Equal("Manoj", pending.FirstName);
-        Assert.Equal("Shekapure", pending.LastName);
-        Assert.Equal("user@example.com", pending.NormalizedEmail);
-        Assert.Equal("+919876543210", pending.NormalizedPhoneNumber);
-        Assert.NotEqual("abc123", pending.PasswordHash);
-        Assert.DoesNotContain("abc123", pending.PasswordHash!, StringComparison.Ordinal);
-        Assert.Equal(LegalDocumentCatalog.CurrentVersion, pending.TermsAndPrivacyVersion);
-        Assert.Equal(Now, pending.TermsAndPrivacyAcceptedAtUtc);
-        Assert.NotEqual(fixture.Sms.LastOtp, challenge.OtpHash);
-        Assert.DoesNotContain(fixture.Sms.LastOtp!, challenge.OtpHash, StringComparison.Ordinal);
-        Assert.Equal(OtpPurpose.Registration, challenge.Purpose);
-        Assert.Equal(1, fixture.Sms.SendCount);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("sms_delivery_completed", StringComparison.Ordinal) &&
-            message.Contains("status Sent", StringComparison.Ordinal));
-        Assert.False(
-            fixture.Logger.Messages.Any(message =>
-                message.Contains(fixture.Sms.LastOtp!, StringComparison.Ordinal) ||
-                message.Contains(pending.NormalizedPhoneNumber, StringComparison.Ordinal) ||
-                message.Contains(pending.Email, StringComparison.OrdinalIgnoreCase) ||
-                message.Contains("abc123", StringComparison.Ordinal)),
-            "Authentication logs contained sensitive registration data.");
+        Assert.Equal("Registration successful. Please log in.", response.Message);
+        var user = Assert.Single(fixture.Users.Items);
+        Assert.Equal("Manoj", user.FirstName);
+        Assert.Equal("Shekapure", user.LastName);
+        Assert.Equal("user@example.com", user.NormalizedEmail);
+        Assert.Equal("+919876543210", user.NormalizedPhoneNumber);
+        Assert.Equal(UserStatus.Active, user.Status);
+        Assert.True(user.PhoneConfirmed);
+        Assert.True(user.EmailConfirmed);
+        Assert.Equal(SystemRoleIds.Candidate, user.RoleId);
+        Assert.NotEqual("abc123", user.PasswordHash);
+        Assert.DoesNotContain("abc123", user.PasswordHash, StringComparison.Ordinal);
+        Assert.Equal(LegalDocumentCatalog.CurrentVersion, user.TermsAndPrivacyVersion);
+        Assert.Equal(Now, user.TermsAndPrivacyAcceptedAtUtc);
+        var audit = Assert.Single(fixture.Audit.Events);
+        Assert.Equal(AuditAction.Create, audit.Action);
         Assert.DoesNotContain(
             "AccessToken",
             JsonSerializer.Serialize(response),
             StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task CancelledRegistrationLogsCancellationWithoutAttemptingSms()
-    {
-        var fixture = CreateFixture();
-        using var cancellation = new CancellationTokenSource();
-        cancellation.Cancel();
-
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            fixture.Service.RegisterAsync(
-                ValidRegistration(),
-                cancellation.Token));
-
-        Assert.Equal(0, fixture.Sms.SendCount);
-        Assert.Equal(0, fixture.UnitOfWork.SaveCount);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("request_cancelled_before_persist", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task ClientCancellationAfterPersistenceDoesNotStrandOtpDelivery()
-    {
-        var fixture = CreateFixture();
-        using var requestCancellation = new CancellationTokenSource();
-        fixture.Sms.BeforeSend = requestCancellation.Cancel;
-
-        var response = await fixture.Service.RegisterAsync(
-            ValidRegistration(),
-            requestCancellation.Token);
-
-        Assert.NotEqual(Guid.Empty, response.ChallengeId);
-        Assert.True(requestCancellation.IsCancellationRequested);
-        Assert.False(fixture.Sms.LastCancellationToken.IsCancellationRequested);
-        Assert.Equal(1, fixture.Sms.SendCount);
-        Assert.Equal(1, fixture.UnitOfWork.SaveCount);
-        Assert.DoesNotContain(fixture.Logger.Messages, message =>
-            message.Contains(
-                "request_cancelled_before_persist",
-                StringComparison.Ordinal));
-        Assert.Single(fixture.Challenges.Pending);
-        Assert.Single(fixture.Challenges.OtpChallenges);
-    }
-
-    [Fact]
-    public async Task CorrectRegistrationOtpCreatesOneActiveCandidateAndReplayIsIdempotent()
-    {
-        var fixture = CreateFixture();
-        var started = await fixture.Service.RegisterAsync(ValidRegistration());
-        var otp = fixture.Sms.LastOtp!;
-
-        var first = await fixture.Service.VerifyRegistrationOtpAsync(
-            new(started.ChallengeId, otp));
-        var replay = await fixture.Service.VerifyRegistrationOtpAsync(
-            new(started.ChallengeId, otp));
-
-        Assert.Equal("Registration successful. Please log in.", first.Message);
-        Assert.Equal(first, replay);
-        var user = Assert.Single(fixture.Users.Items);
-        Assert.Equal(UserStatus.Active, user.Status);
-        Assert.True(user.PhoneConfirmed);
-        Assert.Equal(SystemRoleIds.Candidate, user.RoleId);
-        Assert.Equal("Manoj", user.FirstName);
-        Assert.Equal("Shekapure", user.LastName);
-        Assert.Equal("+919876543210", user.NormalizedPhoneNumber);
-        Assert.Null(Assert.Single(fixture.Challenges.Pending).PasswordHash);
-        Assert.NotNull(Assert.Single(fixture.Challenges.OtpChallenges).ConsumedAtUtc);
-        var audit = Assert.Single(fixture.Audit.Events);
-        var auditJson = JsonSerializer.Serialize(audit);
-        Assert.DoesNotContain("123456", auditJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("9876543210", auditJson, StringComparison.Ordinal);
-        Assert.DoesNotContain("user@example.com", auditJson, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task WrongExpiredAndAttemptLimitedRegistrationOtpsAreRejected()
-    {
-        var fixture = CreateFixture();
-        var started = await fixture.Service.RegisterAsync(ValidRegistration());
-
-        for (var attempt = 0; attempt < 5; attempt++)
-            await Assert.ThrowsAsync<BadRequestException>(() =>
-                fixture.Service.VerifyRegistrationOtpAsync(
-                    new(started.ChallengeId, "000000")));
-        Assert.Equal(
-            5,
-            Assert.Single(fixture.Challenges.OtpChallenges).FailedAttemptCount);
-        await Assert.ThrowsAsync<BadRequestException>(() =>
-            fixture.Service.VerifyRegistrationOtpAsync(
-                new(started.ChallengeId, fixture.Sms.LastOtp!)));
-
-        var expired = CreateFixture();
-        var expiredStart = await expired.Service.RegisterAsync(ValidRegistration());
-        expired.Time.Advance(TimeSpan.FromMinutes(6));
-        await Assert.ThrowsAsync<BadRequestException>(() =>
-            expired.Service.VerifyRegistrationOtpAsync(
-                new(expiredStart.ChallengeId, expired.Sms.LastOtp!)));
-        Assert.Empty(expired.Users.Items);
-    }
-
-    [Fact]
-    public async Task RegistrationResendEnforcesCooldownAndRotatesCode()
-    {
-        var fixture = CreateFixture("123456", "654321");
-        var started = await fixture.Service.RegisterAsync(ValidRegistration());
-        var firstHash = Assert.Single(fixture.Challenges.OtpChallenges).OtpHash;
-
-        await fixture.Service.ResendRegistrationOtpAsync(
-            new(started.ChallengeId));
-        Assert.Equal(1, fixture.Sms.SendCount);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("send_skipped_cooldown", StringComparison.Ordinal));
-        Assert.Equal(firstHash, Assert.Single(fixture.Challenges.OtpChallenges).OtpHash);
-        fixture.Time.Advance(TimeSpan.FromSeconds(61));
-        await fixture.Service.ResendRegistrationOtpAsync(new(started.ChallengeId));
-
-        var challenge = Assert.Single(fixture.Challenges.OtpChallenges);
-        Assert.NotEqual(firstHash, challenge.OtpHash);
-        Assert.Equal("654321", fixture.Sms.LastOtp);
-        Assert.Equal(2, fixture.Sms.SendCount);
-        Assert.Equal(0, challenge.FailedAttemptCount);
-        await Assert.ThrowsAsync<BadRequestException>(() =>
-            fixture.Service.VerifyRegistrationOtpAsync(
-                new(started.ChallengeId, "123456")));
-    }
-
-    [Fact]
-    public async Task ExistingPendingRegistrationReturnsChallengeWithoutSendingAgain()
-    {
-        var fixture = CreateFixture();
-        var first = await fixture.Service.RegisterAsync(ValidRegistration());
-
-        var replay = await fixture.Service.RegisterAsync(ValidRegistration());
-
-        Assert.Equal(first.ChallengeId, replay.ChallengeId);
-        Assert.Equal(first.ExpiresAtUtc, replay.ExpiresAtUtc);
-        Assert.DoesNotContain("sent", replay.Message, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(1, fixture.Sms.SendCount);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("send_skipped_cooldown", StringComparison.Ordinal));
-        Assert.Single(fixture.Challenges.Pending);
-        Assert.Single(fixture.Challenges.OtpChallenges);
-    }
-
-    [Fact]
-    public async Task ExistingPendingRegistrationAfterCooldownRotatesAndSendsAgain()
-    {
-        var fixture = CreateFixture("123456", "654321");
-        var first = await fixture.Service.RegisterAsync(ValidRegistration());
-        var challenge = Assert.Single(fixture.Challenges.OtpChallenges);
-        var originalHash = challenge.OtpHash;
-        fixture.Time.Advance(TimeSpan.FromSeconds(60));
-
-        var replay = await fixture.Service.RegisterAsync(ValidRegistration());
-
-        Assert.Equal(first.ChallengeId, replay.ChallengeId);
-        Assert.Equal(2, fixture.Sms.SendCount);
-        Assert.Equal("654321", fixture.Sms.LastOtp);
-        Assert.NotEqual(originalHash, challenge.OtpHash);
-        Assert.Equal(2, challenge.SendCount);
-        Assert.Equal(0, challenge.FailedAttemptCount);
-        Assert.Equal(Now.AddSeconds(60), challenge.LastSentAtUtc);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("otp_challenge_persisted", StringComparison.Ordinal) &&
-            message.Contains("status rotated", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task RateLimitedRegistrationDoesNotSendAgain()
-    {
-        var fixture = CreateFixture();
-        await fixture.Service.RegisterAsync(ValidRegistration());
-        var challenge = Assert.Single(fixture.Challenges.OtpChallenges);
-        challenge.SendCount = 5;
-        fixture.Time.Advance(TimeSpan.FromSeconds(60));
-
-        await fixture.Service.RegisterAsync(ValidRegistration());
-
-        Assert.Equal(1, fixture.Sms.SendCount);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("send_skipped_rate_limit", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task RegistrationResendLogsRateLimitWithoutSending()
-    {
-        var fixture = CreateFixture();
-        var started = await fixture.Service.RegisterAsync(ValidRegistration());
-        var challenge = Assert.Single(fixture.Challenges.OtpChallenges);
-        challenge.SendCount = 5;
-        fixture.Time.Advance(TimeSpan.FromSeconds(61));
-
-        await fixture.Service.ResendRegistrationOtpAsync(new(started.ChallengeId));
-
-        Assert.Equal(1, fixture.Sms.SendCount);
-        Assert.Contains(fixture.Logger.Messages, message =>
-            message.Contains("send_skipped_rate_limit", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -330,17 +117,15 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
-    public async Task DuplicateIdentityResponseIsPrivateAndConcurrentConflictCreatesNoUser()
+    public async Task DuplicateIdentityResponseIsPrivateAndConcurrentConflictCreatesNoDuplicateUser()
     {
         var duplicate = CreateFixture();
         duplicate.Users.Items.Add(NewUser());
 
         var response = await duplicate.Service.RegisterAsync(ValidRegistration());
 
-        Assert.Equal(
-            "Registration request accepted. Use resend OTP if needed.",
-            response.Message);
-        Assert.Equal(0, duplicate.Sms.SendCount);
+        Assert.Equal("Registration successful. Please log in.", response.Message);
+        Assert.Single(duplicate.Users.Items);
         Assert.Contains(duplicate.Logger.Messages, message =>
             message.Contains("send_skipped_existing_user", StringComparison.Ordinal));
         Assert.DoesNotContain(
@@ -355,25 +140,6 @@ public sealed class AuthenticationTests
             ValidRegistration());
         Assert.Equal(response.Message, concurrentResponse.Message);
         Assert.Empty(concurrent.Users.Items);
-        Assert.Equal(0, concurrent.Sms.SendCount);
-    }
-
-    [Fact]
-    public async Task ConcurrentVerificationConflictReturnsSuccessWithoutDuplicateUser()
-    {
-        var fixture = CreateFixture();
-        var started = await fixture.Service.RegisterAsync(ValidRegistration());
-        fixture.UnitOfWork.ExceptionToThrow =
-            new UniqueConstraintException("duplicate");
-
-        var response = await fixture.Service.VerifyRegistrationOtpAsync(
-            new(started.ChallengeId, fixture.Sms.LastOtp!));
-        var replay = await fixture.Service.VerifyRegistrationOtpAsync(
-            new(started.ChallengeId, fixture.Sms.LastOtp!));
-
-        Assert.Equal("Registration successful. Please log in.", response.Message);
-        Assert.Equal(response, replay);
-        Assert.Single(fixture.Users.Items);
     }
 
     [Fact]
@@ -441,64 +207,15 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
-    public async Task ActiveCandidateCanLoginWithPurposeScopedMobileOtp()
+    public async Task InactiveUserCannotLogin()
     {
-        var fixture = CreateFixture("112233");
+        var fixture = CreateFixture();
         var user = NewUser();
+        user.Status = UserStatus.Inactive;
         fixture.Users.Items.Add(user);
 
-        var requested = await fixture.Service.RequestLoginOtpAsync(
-            new("9876543210"));
-        var response = await fixture.Service.LoginWithOtpAsync(
-            new("9876543210", "112233"),
-            "127.0.0.1");
-
-        Assert.Equal(
-            "If the mobile number is eligible, an OTP has been sent.",
-            requested.Message);
-        Assert.Equal(user.Id, response.User.Id);
-        Assert.Single(fixture.RefreshTokens.Added);
-        Assert.Equal(
-            OtpPurpose.Login,
-            Assert.Single(fixture.Challenges.OtpChallenges).Purpose);
-        Assert.Equal(AuditAction.Login, Assert.Single(fixture.Audit.Events).Action);
-        await Assert.ThrowsAsync<BadRequestException>(() =>
-            fixture.Service.LoginWithOtpAsync(
-                new("9876543210", "112233"),
-                null));
-    }
-
-    [Fact]
-    public async Task OtpRequestResponseDoesNotRevealWhetherMobileExists()
-    {
-        var missing = CreateFixture();
-        var existing = CreateFixture();
-        existing.Users.Items.Add(NewUser());
-
-        var missingResponse = await missing.Service.RequestLoginOtpAsync(
-            new("9876543210"));
-        var existingResponse = await existing.Service.RequestLoginOtpAsync(
-            new("9876543210"));
-
-        Assert.Equal(missingResponse, existingResponse);
-        Assert.Equal(0, missing.Sms.SendCount);
-        Assert.Equal(1, existing.Sms.SendCount);
-    }
-
-    [Fact]
-    public async Task LoginOtpCannotBeReusedForRegistration()
-    {
-        var fixture = CreateFixture("123456");
-        var user = NewUser();
-        fixture.Users.Items.Add(user);
-
-        await fixture.Service.RequestLoginOtpAsync(new("9876543210"));
-        var loginChallenge = Assert.Single(fixture.Challenges.OtpChallenges);
-
-        await Assert.ThrowsAsync<BadRequestException>(() =>
-            fixture.Service.VerifyRegistrationOtpAsync(
-                new(loginChallenge.Id, "123456")));
-        Assert.Empty(fixture.RefreshTokens.Added);
+        await Assert.ThrowsAsync<UnauthorizedException>(() =>
+            fixture.Service.LoginAsync(new("user@example.com", "abc123"), null));
     }
 
     [Fact]
@@ -533,7 +250,6 @@ public sealed class AuthenticationTests
         Assert.NotEqual(fixture.Email.LastRawToken, user.PasswordResetTokenHash);
         Assert.Equal(64, user.PasswordResetTokenHash!.Length);
         Assert.Equal(Now.AddMinutes(30), user.PasswordResetTokenExpiresAtUtc);
-        Assert.Equal(0, fixture.Sms.SendCount);
         var auditJson = JsonSerializer.Serialize(Assert.Single(fixture.Audit.Events));
         Assert.DoesNotContain(fixture.Email.LastRawToken!, auditJson, StringComparison.Ordinal);
         Assert.DoesNotContain(user.Email, auditJson, StringComparison.OrdinalIgnoreCase);
@@ -618,6 +334,45 @@ public sealed class AuthenticationTests
     }
 
     [Fact]
+    public async Task RefreshTokenRotatesAndRevokesPredecessor()
+    {
+        var fixture = CreateFixture();
+        var user = NewUser();
+        fixture.Users.Items.Add(user);
+        var login = await fixture.Service.LoginAsync(new(user.Email, "abc123"), "127.0.0.1");
+
+        var refreshed = await fixture.Service.RefreshAsync(
+            new(login.RefreshToken),
+            "127.0.0.1");
+
+        Assert.NotEqual(login.RefreshToken, refreshed.RefreshToken);
+        var original = fixture.RefreshTokens.Added.First();
+        Assert.NotNull(original.RevokedAtUtc);
+        await Assert.ThrowsAsync<UnauthorizedException>(() =>
+            fixture.Service.RefreshAsync(new(login.RefreshToken), "127.0.0.1"));
+    }
+
+    [Fact]
+    public async Task ChangePasswordRequiresCurrentPasswordAndRevokesSessions()
+    {
+        var fixture = CreateFixture();
+        var user = NewUser();
+        fixture.Users.Items.Add(user);
+
+        await Assert.ThrowsAsync<BadRequestException>(() =>
+            fixture.Service.ChangePasswordAsync(
+                user.Id,
+                new("wrong-password", "newpass")));
+
+        await fixture.Service.ChangePasswordAsync(
+            user.Id,
+            new("abc123", "newpass"));
+
+        Assert.True(fixture.Passwords.Verify("newpass", user.PasswordHash));
+        Assert.True(fixture.RefreshTokens.RevokedForUser);
+    }
+
+    [Fact]
     public void LegalDocumentsAndApiContractsArePublicAndApplicationOwned()
     {
         var terms = LegalDocumentCatalog.TermsOfUse();
@@ -640,20 +395,12 @@ public sealed class AuthenticationTests
             "AuthController.cs"));
         Assert.Contains("terms-of-use", legalController, StringComparison.Ordinal);
         Assert.Contains("privacy-policy", legalController, StringComparison.Ordinal);
-        Assert.Contains("verify-registration-otp", authController, StringComparison.Ordinal);
-        Assert.Contains("login-with-otp", authController, StringComparison.Ordinal);
         Assert.Contains("request-password-reset", authController, StringComparison.Ordinal);
         Assert.Contains("complete-password-reset", authController, StringComparison.Ordinal);
-        Assert.DoesNotContain("request-password-reset-otp", authController, StringComparison.Ordinal);
-        Assert.DoesNotContain("verify-password-reset-otp", authController, StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "[HttpPost(\"forgot-password\")]",
-            authController,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "[HttpPost(\"reset-password\")]",
-            authController,
-            StringComparison.Ordinal);
+        Assert.DoesNotContain("verify-registration-otp", authController, StringComparison.Ordinal);
+        Assert.DoesNotContain("login-with-otp", authController, StringComparison.Ordinal);
+        Assert.DoesNotContain("request-login-otp", authController, StringComparison.Ordinal);
+        Assert.DoesNotContain("resend-registration-otp", authController, StringComparison.Ordinal);
     }
 
     private static RegisterRequest ValidRegistration() => new(
@@ -687,71 +434,53 @@ public sealed class AuthenticationTests
             }
         };
 
-    private static Fixture CreateFixture(params string[] otpValues)
+    private static Fixture CreateFixture()
     {
         var time = new MutableTimeProvider(Now);
         var users = new UserRepositoryFake();
-        var challengeRepository = new ChallengeRepositoryFake();
         var refreshTokens = new RefreshTokenRepositoryFake(users);
         var unitOfWork = new UnitOfWorkFake();
         var passwords = new PasswordHasherFake();
-        var otp = new OtpServiceFake(otpValues);
-        var sms = new SmsServiceFake();
         var email = new EmailServiceFake();
         var audit = new AuditWriterTestDouble();
         var logger = new TestLogger<AuthService>();
-        var applicationShutdown = new ApplicationShutdownFake();
         var service = new AuthService(
             users,
-            challengeRepository,
             refreshTokens,
             unitOfWork,
             passwords,
             new JwtTokenServiceFake(time),
-            otp,
-            sms,
             email,
             audit,
             new RegisterRequestValidator(),
-            new VerifyRegistrationOtpRequestValidator(),
-            new ResendRegistrationOtpRequestValidator(),
             new LoginRequestValidator(),
-            new RequestLoginOtpRequestValidator(),
-            new LoginWithOtpRequestValidator(),
             new RequestPasswordResetRequestValidator(),
             new CompletePasswordResetRequestValidator(),
             new RefreshTokenRequestValidator(),
             new ChangePasswordRequestValidator(),
             time,
-            applicationShutdown,
             logger);
         return new(
             service,
             users,
-            challengeRepository,
             refreshTokens,
             unitOfWork,
             passwords,
-            sms,
             email,
             audit,
             time,
-            applicationShutdown,
             logger);
     }
 
     private sealed record Fixture(
         AuthService Service,
         UserRepositoryFake Users,
-        ChallengeRepositoryFake Challenges,
         RefreshTokenRepositoryFake RefreshTokens,
         UnitOfWorkFake UnitOfWork,
         PasswordHasherFake Passwords,
-        SmsServiceFake Sms,
         EmailServiceFake Email,
         AuditWriterTestDouble Audit,
         MutableTimeProvider Time,
-        ApplicationShutdownFake ApplicationShutdown,
         TestLogger<AuthService> Logger);
 
     private sealed class UserRepositoryFake : IUserRepository
@@ -796,77 +525,6 @@ public sealed class AuthenticationTests
         }
     }
 
-    private sealed class ChallengeRepositoryFake :
-        IAuthenticationChallengeRepository
-    {
-        public List<PendingRegistration> Pending { get; } = [];
-        public List<OtpChallenge> OtpChallenges { get; } = [];
-
-        public Task<PendingRegistration?> GetPendingByIdentityAsync(
-            string normalizedEmail,
-            string normalizedPhoneNumber,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(Pending.SingleOrDefault(item =>
-                item.ClosedAtUtc is null &&
-                item.NormalizedEmail == normalizedEmail &&
-                item.NormalizedPhoneNumber == normalizedPhoneNumber));
-
-        public Task<OtpChallenge?> GetChallengeByIdAsync(
-            Guid challengeId,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(OtpChallenges.SingleOrDefault(
-                challenge => challenge.Id == challengeId));
-
-        public Task<OtpChallenge?> GetLatestForPhoneAsync(
-            string normalizedPhoneNumber,
-            OtpPurpose purpose,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(OtpChallenges
-                .Where(challenge =>
-                    challenge.NormalizedPhoneNumber == normalizedPhoneNumber &&
-                    challenge.Purpose == purpose)
-                .OrderByDescending(challenge => challenge.LastSentAtUtc)
-                .ThenByDescending(challenge => challenge.Id)
-                .FirstOrDefault());
-
-        public Task<int> CountSentSinceAsync(
-            string normalizedPhoneNumber,
-            OtpPurpose purpose,
-            DateTime sinceUtc,
-            CancellationToken cancellationToken = default) =>
-            Task.FromResult(OtpChallenges
-                .Where(challenge =>
-                    challenge.NormalizedPhoneNumber == normalizedPhoneNumber &&
-                    challenge.Purpose == purpose &&
-                    challenge.LastSentAtUtc >= sinceUtc)
-                .Sum(challenge => challenge.SendCount));
-
-        public Task AddPendingAsync(
-            PendingRegistration pendingRegistration,
-            CancellationToken cancellationToken = default)
-        {
-            Pending.Add(pendingRegistration);
-            return Task.CompletedTask;
-        }
-
-        public Task AddChallengeAsync(
-            OtpChallenge challenge,
-            CancellationToken cancellationToken = default)
-        {
-            OtpChallenges.Add(challenge);
-            challenge.PendingRegistration?.OtpChallenges.Add(challenge);
-            return Task.CompletedTask;
-        }
-
-        public void Update(PendingRegistration pendingRegistration)
-        {
-        }
-
-        public void Update(OtpChallenge challenge)
-        {
-        }
-    }
-
     private sealed class RefreshTokenRepositoryFake(
         UserRepositoryFake users) : IRefreshTokenRepository
     {
@@ -876,7 +534,8 @@ public sealed class AuthenticationTests
         public Task<RefreshToken?> GetByTokenHashAsync(
             string tokenHash,
             CancellationToken cancellationToken = default) =>
-            Task.FromResult(Added.FirstOrDefault(token => token.Token == tokenHash));
+            Task.FromResult(Added.FirstOrDefault(token =>
+                token.Token == tokenHash && token.RevokedAtUtc is null));
 
         public Task AddAsync(
             RefreshToken refreshToken,
@@ -928,46 +587,6 @@ public sealed class AuthenticationTests
             Hash(password) == passwordHash;
     }
 
-    private sealed class OtpServiceFake : IOneTimePasswordService
-    {
-        private readonly Queue<string> values;
-
-        public OtpServiceFake(IEnumerable<string> otpValues) =>
-            values = new(otpValues.DefaultIfEmpty("123456"));
-
-        public string Generate() => values.Count > 1
-            ? values.Dequeue()
-            : values.Peek();
-
-        public string Hash(string otp) => Sha256(otp);
-
-        public bool Verify(string otp, string expectedHash) =>
-            CryptographicOperations.FixedTimeEquals(
-                Convert.FromHexString(Hash(otp)),
-                Convert.FromHexString(expectedHash));
-    }
-
-    private sealed class SmsServiceFake : ISmsService
-    {
-        public string? LastOtp { get; private set; }
-        public int SendCount { get; private set; }
-        public Action? BeforeSend { get; set; }
-        public CancellationToken LastCancellationToken { get; private set; }
-
-        public Task<SmsDeliveryResult> SendOtpAsync(
-            string normalizedPhoneNumber,
-            string otp,
-            OtpPurpose purpose,
-            CancellationToken cancellationToken = default)
-        {
-            BeforeSend?.Invoke();
-            LastOtp = otp;
-            LastCancellationToken = cancellationToken;
-            SendCount++;
-            return Task.FromResult(SmsDeliveryResult.Sent);
-        }
-    }
-
     private sealed class EmailServiceFake : IEmailService
     {
         public Action? BeforeSend { get; set; }
@@ -993,11 +612,6 @@ public sealed class AuthenticationTests
             JobApplicationStatus status,
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
-    }
-
-    private sealed class ApplicationShutdownFake : IApplicationShutdown
-    {
-        public CancellationToken ApplicationStopping => default;
     }
 
     private sealed class TestLogger<T> : ILogger<T>
@@ -1045,91 +659,6 @@ public sealed class AuthenticationTests
 
     private static string Sha256(string value) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
-
-    private static string FindRepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null &&
-            !File.Exists(Path.Combine(directory.FullName, "JobPortal.sln")))
-            directory = directory.Parent;
-        return directory?.FullName
-            ?? throw new InvalidOperationException("Repository root was not found.");
-    }
-}
-
-public sealed class AuthenticationPersistenceAndCryptoTests
-{
-    [Fact]
-    public void ModelDefinesChallengeIndexesAndPendingIdentityUniqueness()
-    {
-        var options = new DbContextOptionsBuilder<JobPortalDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString())
-            .Options;
-        using var context = new JobPortalDbContext(options);
-        var pending = context.Model.FindEntityType(typeof(PendingRegistration))!;
-        var challenge = context.Model.FindEntityType(typeof(OtpChallenge))!;
-
-        Assert.Contains(pending.GetIndexes(), index =>
-            index.IsUnique &&
-            index.Properties.Select(property => property.Name)
-                .SequenceEqual([nameof(PendingRegistration.NormalizedEmail)]));
-        Assert.Contains(pending.GetIndexes(), index =>
-            index.IsUnique &&
-            index.Properties.Select(property => property.Name)
-                .SequenceEqual([nameof(PendingRegistration.NormalizedPhoneNumber)]));
-        Assert.Contains(challenge.GetIndexes(), index =>
-            index.Properties.Select(property => property.Name).SequenceEqual(
-                [
-                    nameof(OtpChallenge.NormalizedPhoneNumber),
-                    nameof(OtpChallenge.Purpose),
-                    nameof(OtpChallenge.ConsumedAtUtc),
-                    nameof(OtpChallenge.ExpiresAtUtc)
-                ]));
-    }
-
-    [Fact]
-    public void MigrationNormalizesExistingEmailsAndConfirmsCandidatePhonesOnly()
-    {
-        var root = FindRepositoryRoot();
-        var migration = Directory.GetFiles(
-                Path.Combine(root, "JobPortal.Persistence", "Migrations"),
-                "*_AddSecureMobileOtpAuthentication.cs")
-            .Single();
-        var source = File.ReadAllText(migration);
-
-        Assert.Contains(
-            "LOWER(LTRIM(RTRIM([Email])))",
-            source,
-            StringComparison.Ordinal);
-        Assert.Contains("[PhoneConfirmed]", source, StringComparison.Ordinal);
-        Assert.Contains(
-            SystemRoleIds.Candidate.ToString(),
-            source,
-            StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(
-            SystemRoleIds.Administrator.ToString(),
-            source,
-            StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void ProductionOtpHasherNeverStoresPlainCode()
-    {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Otp:HashKey"] = "test-only-otp-hash-key-with-at-least-32-characters"
-            })
-            .Build();
-        var service = new HmacOneTimePasswordService(configuration);
-
-        var hash = service.Hash("123456");
-
-        Assert.Equal(64, hash.Length);
-        Assert.DoesNotContain("123456", hash, StringComparison.Ordinal);
-        Assert.True(service.Verify("123456", hash));
-        Assert.False(service.Verify("654321", hash));
-    }
 
     private static string FindRepositoryRoot()
     {
